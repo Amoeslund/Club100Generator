@@ -4,3 +4,4 @@ gTTS
 Flask 
 flask-cors
 TTS
+flask_sqlalchemy

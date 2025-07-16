@@ -12,6 +12,8 @@ import base64
 import pathlib
 import concurrent.futures
 import uuid
+from server import db, Job
+import datetime
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 EFFECTS = [
@@ -451,6 +453,14 @@ def process_audio(data: dict) -> str:
             "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(output_mp3)
         ]
         subprocess.run(cmd_concat, check=True)
+        job = Job(id=job_id, status='done', output_path=str(output_mp3), created_at=datetime.datetime.utcnow())
+        db.session.add(job)
+        db.session.commit()
+        # Cache invalidation: remove files older than 7 days
+        now = datetime.datetime.now()
+        for f in CACHE_DIR.glob('*.m4a'):
+            if f.stat().st_mtime < (now - datetime.timedelta(days=7)).timestamp():
+                f.unlink()
         return str(output_mp3)
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)

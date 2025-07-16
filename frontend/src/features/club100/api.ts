@@ -42,12 +42,24 @@ export function getDownloadUrl(jobId: string): string {
  * Search YouTube for songs using the Data API v3.
  * Requires NEXT_PUBLIC_YT_API_KEY in .env.local
  */
+const CACHE_VERSION = 'v1';
+
+export function clearYoutubeSearchCache() {
+  if (typeof window === 'undefined') return;
+  Object.keys(localStorage).forEach((key) => {
+    if (key.startsWith('ytsearch_')) {
+      localStorage.removeItem(key);
+    }
+  });
+  localStorage.setItem('ytsearch_cache_version', CACHE_VERSION);
+}
+
 export async function youtubeSearch(query: string): Promise<Song[]> {
-  // Caching: use localStorage, key is 'ytsearch_' + query
   if (typeof window !== 'undefined') {
     const cacheKey = 'ytsearch_' + encodeURIComponent(query.trim().toLowerCase());
     const cached = localStorage.getItem(cacheKey);
-    if (cached) {
+    const cacheVersion = localStorage.getItem('ytsearch_cache_version');
+    if (cached && cacheVersion === CACHE_VERSION) {
       try {
         const { timestamp, results } = JSON.parse(cached);
         if (Date.now() - timestamp < 24 * 60 * 60 * 1000) {
@@ -66,6 +78,7 @@ export async function youtubeSearch(query: string): Promise<Song[]> {
   if (typeof window !== 'undefined') {
     const cacheKey = 'ytsearch_' + encodeURIComponent(query.trim().toLowerCase());
     localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), results }));
+    localStorage.setItem('ytsearch_cache_version', CACHE_VERSION);
   }
   return results;
 }

@@ -9,11 +9,21 @@ import pathlib
 import base64
 from main import process_audio, EFFECTS
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+import datetime
 
 app = Flask(__name__)
 CORS(app)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///club100.db'
+db = SQLAlchemy(app)
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
+
+class Job(db.Model):
+    id = db.Column(db.String, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    status = db.Column(db.String)
+    output_path = db.Column(db.String)
 
 def build_timeline_from_legacy(data):
     """Convert legacy youtubeUrls/snippets format to timeline format."""
@@ -120,6 +130,28 @@ def ytsearch():
         return jsonify(songs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/initdb', methods=['POST'])
+def init_db():
+    db.create_all()
+    return jsonify({'status': 'initialized'})
+
+@app.route('/jobs', methods=['GET'])
+def list_jobs():
+    jobs = Job.query.order_by(Job.created_at.desc()).all()
+    return jsonify([
+        {'id': j.id, 'created_at': j.created_at.isoformat(), 'status': j.status, 'output_path': j.output_path}
+        for j in jobs
+    ])
+
+@app.route('/cache/clear', methods=['POST'])
+def clear_cache():
+    import shutil
+    cache_dir = pathlib.Path(__file__).parent / 'cache'
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        cache_dir.mkdir(exist_ok=True)
+    return jsonify({'status': 'cache cleared'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True) 
