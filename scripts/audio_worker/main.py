@@ -263,7 +263,11 @@ def process_audio(data: dict) -> str:
                     print(f"[WARN] File missing or empty before concat: {af}", file=sys.stderr)
                 f.write(f"file '{af.as_posix()}'\n")
         output_mp3 = OUTPUT_DIR / f"club100_{job_id}.mp3"
-        cmd_concat = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c", "copy", str(output_mp3)]
+        # Re-encode the concatenated audio to ensure valid MP3 output
+        cmd_concat = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+            "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(output_mp3)
+        ]
         subprocess.run(cmd_concat, check=True)
         return str(output_mp3)
     finally:
