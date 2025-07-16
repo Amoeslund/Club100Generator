@@ -3,30 +3,45 @@ from flask import send_from_directory
 import tempfile
 import os
 import json
-from main import process_audio
 import subprocess
 import traceback
 import pathlib
 import base64
-from main import EFFECTS
+from main import process_audio, EFFECTS
+from flask_cors import CORS
 
 app = Flask(__name__)
-
-from flask_cors import CORS
 CORS(app)
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 
+def build_timeline_from_legacy(data):
+    """Convert legacy youtubeUrls/snippets format to timeline format."""
+    timeline = []
+    youtube_urls = data.get('youtubeUrls', [])
+    snippets = data.get('snippets', [])
+    i = 0
+    while i < max(len(youtube_urls), len(snippets)):
+        if i < len(youtube_urls):
+            timeline.append({'type': 'song', 'song': {'url': youtube_urls[i], 'title': f'Song {i+1}'}})
+        if i < len(snippets):
+            timeline.append({'type': 'snippet', 'snippet': snippets[i]})
+        i += 1
+    return timeline
+
 @app.route('/effects', methods=['GET'])
 def list_effects():
+    """List all available effects."""
     return jsonify(EFFECTS)
 
 @app.route('/effects/<path:filename>', methods=['GET'])
 def serve_effect(filename):
+    """Serve an effect audio file by filename."""
     return send_from_directory(EFFECTS_DIR, filename)
 
 @app.route('/effects/<effect_id>/data', methods=['GET'])
 def effect_data(effect_id):
+    """Return base64 data URL for a given effect ID."""
     effect = next((e for e in EFFECTS if e['id'] == effect_id), None)
     if not effect:
         return jsonify({'error': 'Effect not found'}), 404
@@ -41,21 +56,10 @@ def effect_data(effect_id):
 
 @app.route('/generate', methods=['POST'])
 def generate():
+    """Generate audio from a timeline or legacy format."""
     data = request.get_json()
-    # Accept timeline (preferred), or fallback to youtubeUrls/snippets for backward compatibility
     if 'timeline' not in data:
-        # Build timeline from old format
-        timeline = []
-        youtube_urls = data.get('youtubeUrls', [])
-        snippets = data.get('snippets', [])
-        i = 0
-        while i < max(len(youtube_urls), len(snippets)):
-            if i < len(youtube_urls):
-                timeline.append({'type': 'song', 'song': {'url': youtube_urls[i], 'title': f'Song {i+1}'}})
-            if i < len(snippets):
-                timeline.append({'type': 'snippet', 'snippet': snippets[i]})
-            i += 1
-        data['timeline'] = timeline
+        data['timeline'] = build_timeline_from_legacy(data)
     try:
         output_path = process_audio(data)
         print(f"DEBUG: output_path = {output_path}")
@@ -76,6 +80,7 @@ def generate():
 
 @app.route('/download/<job_id>', methods=['GET'])
 def download(job_id):
+    """Download the generated audio file by job ID."""
     output_dir = os.path.join(os.path.dirname(__file__), 'output')
     file_path = os.path.join(output_dir, f'club100_{job_id}.mp3')
     if not os.path.exists(file_path):
@@ -84,12 +89,12 @@ def download(job_id):
 
 @app.route('/ytsearch', methods=['POST'])
 def ytsearch():
+    """Search YouTube for songs using yt-dlp."""
     data = request.get_json()
     query = data.get('query')
     if not query:
         return jsonify({'error': 'Missing query'}), 400
     try:
-        # yt-dlp output: id, title, uploader, thumbnail
         result = subprocess.run(
             [
                 'yt-dlp',

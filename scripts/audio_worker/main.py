@@ -11,6 +11,7 @@ from TTS.api import TTS
 import base64
 import pathlib
 import concurrent.futures
+
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 EFFECTS = [
     {
@@ -28,13 +29,126 @@ EFFECTS = [
         'name': 'Sus meme sound',
         'audioUrl': '/effects/sus-meme-sound.mp3',
     },
+    {
+        'id': 'sexy_sax',
+        'name': 'Sexy Saxophone',
+        'audioUrl': '/effects/sexy-sax.mp3',
+    },
     # Add more effects here as needed
 ]
 EFFECTS_MAP = {e['id']: e for e in EFFECTS}
 
+CACHE_DIR = Path(__file__).parent / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# --- Helper Functions ---
+def extract_youtube_id(url):
+    """Extract the YouTube video ID from a URL."""
+    import re
+    patterns = [
+        r"(?:v=|youtu\.be/|youtube\.com/embed/)([\w-]{11})",
+        r"youtube\.com/watch\?v=([\w-]{11})"
+    ]
+    for pat in patterns:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return None
+
+def get_youtube_duration(url):
+    """Get the duration of a YouTube video in seconds using yt-dlp."""
+    cmd = ["yt-dlp", "--get-duration", url]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    duration_str = result.stdout.strip()
+    parts = duration_str.split(":")
+    if len(parts) == 3:
+        h, m, s = map(int, parts)
+        return h * 3600 + m * 60 + s
+    elif len(parts) == 2:
+        m, s = map(int, parts)
+        return m * 60 + s
+    else:
+        return int(parts[0])
+
+def download_random_youtube_audio(url, out_path, start_override=None):
+    """Download a random 60s audio segment from a YouTube video, with caching."""
+    duration = get_youtube_duration(url)
+    if duration <= 60:
+        start = 0
+    else:
+        if start_override is not None:
+            start = max(0, min(duration - 60, int(start_override)))
+        else:
+            start = random.randint(0, duration - 60)
+    video_id = extract_youtube_id(url)
+    cache_path = CACHE_DIR / f"{video_id}.full.m4a" if video_id else None
+    temp_audio = out_path.with_suffix('.full.m4a')
+    # Check cache
+    if cache_path and cache_path.exists():
+        shutil.copy(cache_path, temp_audio)
+    else:
+        cmd_dl = ["yt-dlp", "-f", "bestaudio", "-o", str(temp_audio), url]
+        subprocess.run(cmd_dl, check=True)
+        if cache_path:
+            shutil.copy(temp_audio, cache_path)
+    cmd_trim = ["ffmpeg", "-y", "-ss", str(start), "-i", str(temp_audio), "-t", "60", "-acodec", "mp3", str(out_path)]
+    subprocess.run(cmd_trim, check=True)
+    temp_audio.unlink(missing_ok=True)
+
+def generate_tts_with_fade(text, lang, out_path):
+    """Generate TTS audio with fade in/out and standardize format."""
+    if lang == "da":
+        tts = gTTS(text=text, lang=lang)
+        raw_path = out_path.with_suffix('.raw.mp3')
+        tts.save(str(raw_path))
+    else:
+        if lang == "en":
+            model_name = "tts_models/en/ljspeech/tacotron2-DDC"
+        else:
+            model_name = "tts_models/multilingual/multi-dataset/your_tts"
+        tts = TTS(model_name)
+        raw_path = out_path.with_suffix('.raw.wav')
+        if hasattr(tts, 'is_multi_speaker') and tts.is_multi_speaker:
+            speaker = tts.speakers[0]
+            if hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
+                tts.tts_to_file(text=text, speaker=speaker, language=lang, file_path=str(raw_path))
+            else:
+                tts.tts_to_file(text=text, speaker=speaker, file_path=str(raw_path))
+        elif hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
+            tts.tts_to_file(text=text, language=lang, file_path=str(raw_path))
+        else:
+            tts.tts_to_file(text=text, file_path=str(raw_path))
+    cmd_probe = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(raw_path)]
+    result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+    duration = float(result.stdout.strip())
+    if duration > 2.2:
+        fade = 1.0
+    else:
+        fade = min(0.5, duration * 0.1)
+    fade_filter = f"afade=t=in:ss=0:d={fade:.2f},afade=t=out:st={max(0, duration-fade):.2f}:d={fade:.2f}"
+    faded_path = out_path.with_suffix('.faded.mp3')
+    std_path = out_path.with_suffix('.std.mp3')
+    cmd_fade = ["ffmpeg", "-y", "-i", str(raw_path), "-af", fade_filter, str(faded_path)]
+    fade_proc = subprocess.run(cmd_fade, capture_output=True, text=True)
+    if fade_proc.returncode != 0:
+        raise Exception(f"ffmpeg fade failed: {fade_proc.stderr}")
+    if not faded_path.exists() or faded_path.stat().st_size == 0:
+        raise Exception(f"TTS fade output missing: {faded_path}")
+    cmd_std = ["ffmpeg", "-y", "-i", str(faded_path), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(std_path)]
+    std_proc = subprocess.run(cmd_std, capture_output=True, text=True)
+    if std_proc.returncode != 0:
+        raise Exception(f"ffmpeg std re-encode failed: {std_proc.stderr}")
+    if not std_path.exists() or std_path.stat().st_size == 0:
+        raise Exception(f"TTS std output missing: {std_path}")
+    std_path.replace(out_path)
+    raw_path.unlink(missing_ok=True)
+    faded_path.unlink(missing_ok=True)
+
+# --- Main Processing Function ---
 def process_audio(data: dict) -> str:
-    OUTPUT_DIR = Path(__file__).parent / "output"
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    """Process the timeline and generate the final audio file. Returns output path."""
     timeline = data.get("timeline", [])
     language = data.get("language", "da")
     job_id = next(tempfile._get_candidate_names())
@@ -42,104 +156,6 @@ def process_audio(data: dict) -> str:
     job_dir.mkdir(exist_ok=True)
     audio_files = []
     try:
-        # --- (Helper functions are defined below) ---
-        CACHE_DIR = Path(__file__).parent / "cache"
-        CACHE_DIR.mkdir(exist_ok=True)
-        def extract_youtube_id(url):
-            import re
-            patterns = [
-                r"(?:v=|youtu\.be/|youtube\.com/embed/)([\w-]{11})",
-                r"youtube\.com/watch\?v=([\w-]{11})"
-            ]
-            for pat in patterns:
-                m = re.search(pat, url)
-                if m:
-                    return m.group(1)
-            return None
-        def get_youtube_duration(url):
-            cmd = ["yt-dlp", "--get-duration", url]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            duration_str = result.stdout.strip()
-            parts = duration_str.split(":")
-            if len(parts) == 3:
-                h, m, s = map(int, parts)
-                return h * 3600 + m * 60 + s
-            elif len(parts) == 2:
-                m, s = map(int, parts)
-                return m * 60 + s
-            else:
-                return int(parts[0])
-        def download_random_youtube_audio(url, out_path, start_override=None):
-            duration = get_youtube_duration(url)
-            if duration <= 60:
-                start = 0
-            else:
-                if start_override is not None:
-                    start = max(0, min(duration - 60, int(start_override)))
-                else:
-                    start = random.randint(0, duration - 60)
-            video_id = extract_youtube_id(url)
-            cache_path = CACHE_DIR / f"{video_id}.full.m4a" if video_id else None
-            temp_audio = out_path.with_suffix('.full.m4a')
-            # Check cache
-            if cache_path and cache_path.exists():
-                shutil.copy(cache_path, temp_audio)
-            else:
-                cmd_dl = ["yt-dlp", "-f", "bestaudio", "-o", str(temp_audio), url]
-                subprocess.run(cmd_dl, check=True)
-                if cache_path:
-                    shutil.copy(temp_audio, cache_path)
-            cmd_trim = ["ffmpeg", "-y", "-ss", str(start), "-i", str(temp_audio), "-t", "60", "-acodec", "mp3", str(out_path)]
-            subprocess.run(cmd_trim, check=True)
-            temp_audio.unlink(missing_ok=True)
-        def generate_tts_with_fade(text, lang, out_path):
-            if lang == "da":
-                tts = gTTS(text=text, lang=lang)
-                raw_path = out_path.with_suffix('.raw.mp3')
-                tts.save(str(raw_path))
-            else:
-                if lang == "en":
-                    model_name = "tts_models/en/ljspeech/tacotron2-DDC"
-                else:
-                    model_name = "tts_models/multilingual/multi-dataset/your_tts"
-                tts = TTS(model_name)
-                raw_path = out_path.with_suffix('.raw.wav')
-                if hasattr(tts, 'is_multi_speaker') and tts.is_multi_speaker:
-                    speaker = tts.speakers[0]
-                    if hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
-                        tts.tts_to_file(text=text, speaker=speaker, language=lang, file_path=str(raw_path))
-                    else:
-                        tts.tts_to_file(text=text, speaker=speaker, file_path=str(raw_path))
-                elif hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
-                    tts.tts_to_file(text=text, language=lang, file_path=str(raw_path))
-                else:
-                    tts.tts_to_file(text=text, file_path=str(raw_path))
-            cmd_probe = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(raw_path)]
-            result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
-            duration = float(result.stdout.strip())
-            if duration > 2.2:
-                fade = 1.0
-            else:
-                fade = min(0.5, duration * 0.1)
-            fade_filter = f"afade=t=in:ss=0:d={fade:.2f},afade=t=out:st={max(0, duration-fade):.2f}:d={fade:.2f}"
-            faded_path = out_path.with_suffix('.faded.mp3')
-            std_path = out_path.with_suffix('.std.mp3')
-            cmd_fade = ["ffmpeg", "-y", "-i", str(raw_path), "-af", fade_filter, str(faded_path)]
-            fade_proc = subprocess.run(cmd_fade, capture_output=True, text=True)
-            if fade_proc.returncode != 0:
-                raise Exception(f"ffmpeg fade failed: {fade_proc.stderr}")
-            if not faded_path.exists() or faded_path.stat().st_size == 0:
-                raise Exception(f"TTS fade output missing: {faded_path}")
-            cmd_std = ["ffmpeg", "-y", "-i", str(faded_path), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(std_path)]
-            std_proc = subprocess.run(cmd_std, capture_output=True, text=True)
-            if std_proc.returncode != 0:
-                raise Exception(f"ffmpeg std re-encode failed: {std_proc.stderr}")
-            if not std_path.exists() or std_path.stat().st_size == 0:
-                raise Exception(f"TTS std output missing: {std_path}")
-            std_path.replace(out_path)
-            raw_path.unlink(missing_ok=True)
-            faded_path.unlink(missing_ok=True)
-        # --- (Main logic) ---
         # 1. Download all songs in parallel first
         song_download_tasks = []
         song_download_results = {}
