@@ -14,6 +14,7 @@ import concurrent.futures
 import uuid
 from server import db, Job
 import datetime
+from utils import extract_youtube_id, get_youtube_duration
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 EFFECTS = [
@@ -222,35 +223,7 @@ OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # --- Helper Functions ---
-def extract_youtube_id(url):
-    """Extract the YouTube video ID from a URL."""
-    import re
-    patterns = [
-        r"(?:v=|youtu\.be/|youtube\.com/embed/)([\w-]{11})",
-        r"youtube\.com/watch\?v=([\w-]{11})"
-    ]
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            return m.group(1)
-    return None
-
-def get_youtube_duration(url):
-    """Get the duration of a YouTube video in seconds using yt-dlp."""
-    cmd = ["yt-dlp", "--get-duration", url]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    duration_str = result.stdout.strip()
-    parts = duration_str.split(":")
-    if len(parts) == 3:
-        h, m, s = map(int, parts)
-        return h * 3600 + m * 60 + s
-    elif len(parts) == 2:
-        m, s = map(int, parts)
-        return m * 60 + s
-    else:
-        return int(parts[0])
-
-def download_random_youtube_audio(url, out_path, start_override=None):
+def download_random_youtube_audio(url: str, out_path: Path, start_override: int | None = None) -> None:
     """Download a random 60s audio segment from a YouTube video, with caching."""
     duration = get_youtube_duration(url)
     if duration <= 60:
@@ -275,7 +248,7 @@ def download_random_youtube_audio(url, out_path, start_override=None):
     subprocess.run(cmd_trim, check=True)
     temp_audio.unlink(missing_ok=True)
 
-def generate_tts_with_fade(text, lang, out_path):
+def generate_tts_with_fade(text: str, lang: str, out_path: Path) -> None:
     """Generate TTS audio with fade in/out and standardize format."""
     if lang == "da":
         tts = gTTS(text=text, lang=lang)
