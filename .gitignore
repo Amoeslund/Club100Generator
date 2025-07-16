@@ -147,3 +147,4 @@ temp/
 
 scripts/audio_worker/output/
 scripts/audio_worker/cache/
+__pycache__/
