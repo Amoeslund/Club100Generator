@@ -111,3 +111,20 @@ yarn dev
 
 ## License
 This project is for educational and personal use. See individual file headers for third-party asset licenses. 
+
+---
+
+## YouTube Data API (Optional)
+
+To enable higher-quality YouTube search (faster and more reliable), you can use the YouTube Data API v3:
+
+1. [Get an API key from Google Cloud Console](https://console.developers.google.com/apis/credentials).
+2. In the `frontend` directory, create a file named `.env.local` with the following content:
+
+```
+NEXT_YOUTUBE_API_KEY=[YOUR_API_KEY]
+```
+
+If this file is not present, the app will fall back to using `yt-dlp` for YouTube search.
+
+--- 
