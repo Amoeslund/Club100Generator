@@ -1,6 +1,5 @@
 import React, { useRef, useState } from 'react';
 import { TrackItem, Song, Snippet, Effect } from './types';
-import Recorder from 'recorder-js';
 import {
   DndContext,
   closestCenter,
@@ -50,6 +49,8 @@ export const TrackTimeline: React.FC<{
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const context = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
     setAudioContext(context);
+    // Dynamically import Recorder
+    const Recorder = (await import('recorder-js')).default;
     const recorder = new Recorder(context, { type: 'wav' });
     await recorder.init(stream);
     setRecorderInstance(recorder);

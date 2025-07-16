@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
 import { getSnippets, generateTrack, youtubeSearch, getEffects } from './api';
 import { LanguageSelector } from './LanguageSelector';
 import { GenerateButton } from './GenerateButton';
 import { SongSearch } from './SongSearch';
-import { TrackTimeline } from './TrackTimeline';
+const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
 export const Club100Page: React.FC = () => {
   // Load from localStorage if present
@@ -278,21 +278,23 @@ export const Club100Page: React.FC = () => {
           </div>
         )}
       </div>
-      <TrackTimeline
-        items={trackItems}
-        onUpdateItem={handleUpdateItem}
-        onRemoveItem={handleRemoveItem}
-        onMoveItem={handleMoveItem}
-        onAddSong={handleAddSong}
-        onAddSnippet={handleAddSnippet}
-        onAddEffect={(effect, idx) => handleAddEffect(effect, idx)}
-        effects={effects}
-        addEffectIdx={addEffectIdx}
-        setAddEffectIdx={setAddEffectIdx}
-        selectedEffectId={selectedEffectId}
-        setSelectedEffectId={setSelectedEffectId}
-        onClearTimeline={() => setTrackItems([])}
-      />
+      <Suspense fallback={<div>Loading timeline...</div>}>
+        <TrackTimeline
+          items={trackItems}
+          onUpdateItem={handleUpdateItem}
+          onRemoveItem={handleRemoveItem}
+          onMoveItem={handleMoveItem}
+          onAddSong={handleAddSong}
+          onAddSnippet={handleAddSnippet}
+          onAddEffect={(effect, idx) => handleAddEffect(effect, idx)}
+          effects={effects}
+          addEffectIdx={addEffectIdx}
+          setAddEffectIdx={setAddEffectIdx}
+          selectedEffectId={selectedEffectId}
+          setSelectedEffectId={setSelectedEffectId}
+          onClearTimeline={() => setTrackItems([])}
+        />
+      </Suspense>
       <GenerateButton onClick={handleGenerate} loading={loading} />
       {loading && (
         <div style={{ marginTop: 16, textAlign: 'center' }}>
