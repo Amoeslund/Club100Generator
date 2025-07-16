@@ -34,6 +34,11 @@ EFFECTS = [
         'name': 'Sexy Saxophone',
         'audioUrl': '/effects/sexy-sax.mp3',
     },
+    {
+        'id': 'mlg_airhorn',
+        'name': 'MLG Airhorn',
+        'audioUrl': '/effects/mlg_airhorn.mp3',
+    },
     # Add more effects here as needed
 ]
 EFFECTS_MAP = {e['id']: e for e in EFFECTS}
