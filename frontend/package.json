@@ -9,7 +9,8 @@
     "start": "next start",
     "lint": "next lint",
     "api:generate": "orval",
-    "api:watch": "orval --watch"
+    "api:watch": "orval --watch",
+    "analyze": "BUNDLE_ANALYZE=true next build"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@next/bundle-analyzer": "^15.4.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
