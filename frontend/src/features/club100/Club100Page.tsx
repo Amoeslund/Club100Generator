@@ -1,3 +1,9 @@
+/**
+ * Club100Page.tsx
+ *
+ * Main page for the Club 100 Generator. Handles state for the timeline, language, effects, mass import, and track generation.
+ * Integrates all major UI components and coordinates backend API calls.
+ */
 import React, { useEffect, useState } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
 import { getSnippets, generateTrack, youtubeSearch, getEffects } from './api';
@@ -6,6 +12,11 @@ import { GenerateButton } from './GenerateButton';
 import { SongSearch } from './SongSearch';
 import { TrackTimeline } from './TrackTimeline';
 
+/**
+ * Club100Page
+ * Main React component for the Club 100 Generator UI.
+ * Handles timeline state, language selection, effect management, mass import, and track generation.
+ */
 export const Club100Page: React.FC = () => {
   // Load from localStorage if present
   const [language, setLanguage] = useState(() => {
