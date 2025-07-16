@@ -11,6 +11,7 @@ from TTS.api import TTS
 import base64
 import pathlib
 import concurrent.futures
+import uuid
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 EFFECTS = [
@@ -31,13 +32,183 @@ EFFECTS = [
     },
     {
         'id': 'sexy_sax',
-        'name': 'Sexy Saxophone',
+        'name': 'Sexy Sax',
         'audioUrl': '/effects/sexy-sax.mp3',
     },
     {
         'id': 'mlg_airhorn',
         'name': 'MLG Airhorn',
         'audioUrl': '/effects/mlg_airhorn.mp3',
+    },
+    {
+        'id': 'fart',
+        'name': 'Fart',
+        'audioUrl': '/effects/fart.mp3',
+    },
+    {
+        'id': 'among_us_role_reveal',
+        'name': 'Among Us Role Reveal',
+        'audioUrl': '/effects/among-us-role-reveal.mp3',
+    },
+    {
+        'id': 'anime_wow',
+        'name': 'Anime Wow',
+        'audioUrl': '/effects/anime-wow.mp3',
+    },
+    {
+        'id': 'pew_pew',
+        'name': 'Pew Pew',
+        'audioUrl': '/effects/pew-pew.mp3',
+    },
+    {
+        'id': 'rizz',
+        'name': 'Rizz Sound Effect',
+        'audioUrl': '/effects/rizz.mp3',
+    },
+    {
+        'id': 'discord_notification',
+        'name': 'Discord Notification',
+        'audioUrl': '/effects/discord-notification.mp3',
+    },
+    {
+        'id': 'spongebob_fail',
+        'name': 'SpongeBob Fail',
+        'audioUrl': '/effects/spongebob-fail.mp3',
+    },
+    {
+        'id': 'metal_pipe_clang',
+        'name': 'Metal Pipe Clang',
+        'audioUrl': '/effects/metal-pipe-clang.mp3',
+    },
+    {
+        'id': 'flashbang',
+        'name': 'Flashbang',
+        'audioUrl': '/effects/flashbang.mp3',
+    },
+    {
+        'id': 'fart_button',
+        'name': 'Fart Button',
+        'audioUrl': '/effects/fart-button.mp3',
+    },
+    {
+        'id': 'gayy_echo',
+        'name': 'GAYY ECHO',
+        'audioUrl': '/effects/gayy-echo.mp3',
+    },
+    {
+        'id': 'punch',
+        'name': 'Punch Sound',
+        'audioUrl': '/effects/punch.mp3',
+    },
+    {
+        'id': 'error_sounds',
+        'name': 'Error SOUNDSS',
+        'audioUrl': '/effects/error-sounds.mp3',
+    },
+    {
+        'id': 'bone_crack',
+        'name': 'Bone Crack',
+        'audioUrl': '/effects/bone-crack.mp3',
+    },
+    {
+        'id': 'ding',
+        'name': 'Ding Sound Effect',
+        'audioUrl': '/effects/ding.mp3',
+    },
+    {
+        'id': 'dun_dun_dunnnnnnnn',
+        'name': 'Dun Dun Dunnnnnnnn',
+        'audioUrl': '/effects/dun-dun-dunnnnnnnn.mp3',
+    },
+    {
+        'id': 'undertaker_bell',
+        'name': 'The Undertaker Bell',
+        'audioUrl': '/effects/undertaker-bell.mp3',
+    },
+    {
+        'id': 'death_sound_fortnite',
+        'name': 'Death Sound (Fortnite)',
+        'audioUrl': '/effects/death-sound-fortnite.mp3',
+    },
+    {
+        'id': 'a_few_moments_later',
+        'name': 'A Few Moments Later (SpongeBob)',
+        'audioUrl': '/effects/a-few-moments-later.mp3',
+    },
+    {
+        'id': 'asian_meme_huh',
+        'name': 'Asian Meme Huh?',
+        'audioUrl': '/effects/asian-meme-huh.mp3',
+    },
+    {
+        'id': 'goofy_ahh_car_horn',
+        'name': 'Goofy Ahh Car Horn',
+        'audioUrl': '/effects/goofy-ahh-car-horn.mp3',
+    },
+    {
+        'id': 'taco_bell_bong',
+        'name': 'Taco Bell Bong',
+        'audioUrl': '/effects/taco-bell-bong.mp3',
+    },
+    {
+        'id': 'apple_pay',
+        'name': 'Apple Pay Sound',
+        'audioUrl': '/effects/apple-pay.mp3',
+    },
+    {
+        'id': 'fart_meme',
+        'name': 'Fart Meme Sound',
+        'audioUrl': '/effects/fart-meme.mp3',
+    },
+    {
+        'id': 'galaxy_meme',
+        'name': 'Galaxy Meme',
+        'audioUrl': '/effects/galaxy-meme.mp3',
+    },
+    {
+        'id': 'discord_call',
+        'name': 'Discord Call',
+        'audioUrl': '/effects/discord-call.mp3',
+    },
+    {
+        'id': '999_social_credit_siren',
+        'name': '999 Social Credit Siren',
+        'audioUrl': '/effects/999-social-credit-siren.mp3',
+    },
+    {
+        'id': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'name': 'Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'audioUrl': '/effects/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp3',
+    },
+    {
+        'id': 'aww',
+        'name': 'Aww',
+        'audioUrl': '/effects/aww.mp3',
+    },
+    {
+        'id': 'chalo',
+        'name': 'Chalo',
+        'audioUrl': '/effects/chalo.mp3',
+    },
+    {
+        'id': 'gopgopgop',
+        'name': 'GopGopGop',
+        'audioUrl': '/effects/gopgopgop.mp3',
+    },
+    {
+        'id': 'hub_intro_sound',
+        'name': 'Hub Intro Sound',
+        'audioUrl': '/effects/hub-intro-sound.mp3',
+    },
+    {
+        'id': 'mac_quack',
+        'name': 'Mac Quack',
+        'audioUrl': '/effects/mac-quack.mp3',
+    },
+    {
+        'id': 'door_knocking',
+        'name': 'Door Knocking',
+        'audioUrl': '/effects/door-knocking.mp3',
     },
     # Add more effects here as needed
 ]
@@ -156,7 +327,7 @@ def process_audio(data: dict) -> str:
     """Process the timeline and generate the final audio file. Returns output path."""
     timeline = data.get("timeline", [])
     language = data.get("language", "da")
-    job_id = next(tempfile._get_candidate_names())
+    job_id = str(uuid.uuid4())
     job_dir = Path(tempfile.gettempdir()) / f"club100_{job_id}"
     job_dir.mkdir(exist_ok=True)
     audio_files = []
@@ -183,8 +354,11 @@ def process_audio(data: dict) -> str:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
                 for future in concurrent.futures.as_completed(futures):
-                    i, song_raw = future.result()
-                    song_download_results[i] = song_raw
+                    result = future.result()
+                    if result is not None and isinstance(result, tuple) and len(result) == 2:
+                        i, song_raw = result
+                        if i is not None and song_raw is not None:
+                            song_download_results[i] = song_raw
 
         # 2. Process all timeline items in parallel (re-encode/generate/copy)
         def process_item_task(args):
@@ -250,8 +424,11 @@ def process_audio(data: dict) -> str:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = [executor.submit(process_item_task, args) for args in item_tasks]
                 for future in concurrent.futures.as_completed(futures):
-                    i, out_path = future.result()
-                    processed_results[i] = out_path
+                    result = future.result()
+                    if result is not None and isinstance(result, tuple) and len(result) == 2:
+                        i, out_path = result
+                        if i is not None and out_path is not None:
+                            processed_results[i] = out_path
 
         # 3. Collect processed audio files in timeline order
         audio_files = []
