@@ -1,0 +1,263 @@
+import sys
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from gtts import gTTS
+from pathlib import Path
+import random
+from TTS.api import TTS
+import base64
+import pathlib
+import concurrent.futures
+EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
+EFFECTS = [
+    {
+        'id': 'vine_boom',
+        'name': 'Vine Boom',
+        'audioUrl': '/effects/vine-boom.mp3',
+    },
+    {
+        'id': 'vine_boom_spam',
+        'name': 'Vine Boom Spam',
+        'audioUrl': '/effects/vine-boom-spam.mp3',
+    },
+    {
+        'id': 'sus_meme_sound',
+        'name': 'Sus meme sound',
+        'audioUrl': '/effects/sus-meme-sound.mp3',
+    },
+    # Add more effects here as needed
+]
+EFFECTS_MAP = {e['id']: e for e in EFFECTS}
+
+def process_audio(data: dict) -> str:
+    OUTPUT_DIR = Path(__file__).parent / "output"
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    timeline = data.get("timeline", [])
+    language = data.get("language", "da")
+    job_id = next(tempfile._get_candidate_names())
+    job_dir = Path(tempfile.gettempdir()) / f"club100_{job_id}"
+    job_dir.mkdir(exist_ok=True)
+    audio_files = []
+    try:
+        # --- (Helper functions are defined below) ---
+        CACHE_DIR = Path(__file__).parent / "cache"
+        CACHE_DIR.mkdir(exist_ok=True)
+        def extract_youtube_id(url):
+            import re
+            patterns = [
+                r"(?:v=|youtu\.be/|youtube\.com/embed/)([\w-]{11})",
+                r"youtube\.com/watch\?v=([\w-]{11})"
+            ]
+            for pat in patterns:
+                m = re.search(pat, url)
+                if m:
+                    return m.group(1)
+            return None
+        def get_youtube_duration(url):
+            cmd = ["yt-dlp", "--get-duration", url]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            duration_str = result.stdout.strip()
+            parts = duration_str.split(":")
+            if len(parts) == 3:
+                h, m, s = map(int, parts)
+                return h * 3600 + m * 60 + s
+            elif len(parts) == 2:
+                m, s = map(int, parts)
+                return m * 60 + s
+            else:
+                return int(parts[0])
+        def download_random_youtube_audio(url, out_path, start_override=None):
+            duration = get_youtube_duration(url)
+            if duration <= 60:
+                start = 0
+            else:
+                if start_override is not None:
+                    start = max(0, min(duration - 60, int(start_override)))
+                else:
+                    start = random.randint(0, duration - 60)
+            video_id = extract_youtube_id(url)
+            cache_path = CACHE_DIR / f"{video_id}.full.m4a" if video_id else None
+            temp_audio = out_path.with_suffix('.full.m4a')
+            # Check cache
+            if cache_path and cache_path.exists():
+                shutil.copy(cache_path, temp_audio)
+            else:
+                cmd_dl = ["yt-dlp", "-f", "bestaudio", "-o", str(temp_audio), url]
+                subprocess.run(cmd_dl, check=True)
+                if cache_path:
+                    shutil.copy(temp_audio, cache_path)
+            cmd_trim = ["ffmpeg", "-y", "-ss", str(start), "-i", str(temp_audio), "-t", "60", "-acodec", "mp3", str(out_path)]
+            subprocess.run(cmd_trim, check=True)
+            temp_audio.unlink(missing_ok=True)
+        def generate_tts_with_fade(text, lang, out_path):
+            if lang == "da":
+                tts = gTTS(text=text, lang=lang)
+                raw_path = out_path.with_suffix('.raw.mp3')
+                tts.save(str(raw_path))
+            else:
+                if lang == "en":
+                    model_name = "tts_models/en/ljspeech/tacotron2-DDC"
+                else:
+                    model_name = "tts_models/multilingual/multi-dataset/your_tts"
+                tts = TTS(model_name)
+                raw_path = out_path.with_suffix('.raw.wav')
+                if hasattr(tts, 'is_multi_speaker') and tts.is_multi_speaker:
+                    speaker = tts.speakers[0]
+                    if hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
+                        tts.tts_to_file(text=text, speaker=speaker, language=lang, file_path=str(raw_path))
+                    else:
+                        tts.tts_to_file(text=text, speaker=speaker, file_path=str(raw_path))
+                elif hasattr(tts, 'is_multi_lingual') and tts.is_multi_lingual:
+                    tts.tts_to_file(text=text, language=lang, file_path=str(raw_path))
+                else:
+                    tts.tts_to_file(text=text, file_path=str(raw_path))
+            cmd_probe = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(raw_path)]
+            result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+            duration = float(result.stdout.strip())
+            if duration > 2.2:
+                fade = 1.0
+            else:
+                fade = min(0.5, duration * 0.1)
+            fade_filter = f"afade=t=in:ss=0:d={fade:.2f},afade=t=out:st={max(0, duration-fade):.2f}:d={fade:.2f}"
+            faded_path = out_path.with_suffix('.faded.mp3')
+            std_path = out_path.with_suffix('.std.mp3')
+            cmd_fade = ["ffmpeg", "-y", "-i", str(raw_path), "-af", fade_filter, str(faded_path)]
+            fade_proc = subprocess.run(cmd_fade, capture_output=True, text=True)
+            if fade_proc.returncode != 0:
+                raise Exception(f"ffmpeg fade failed: {fade_proc.stderr}")
+            if not faded_path.exists() or faded_path.stat().st_size == 0:
+                raise Exception(f"TTS fade output missing: {faded_path}")
+            cmd_std = ["ffmpeg", "-y", "-i", str(faded_path), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(std_path)]
+            std_proc = subprocess.run(cmd_std, capture_output=True, text=True)
+            if std_proc.returncode != 0:
+                raise Exception(f"ffmpeg std re-encode failed: {std_proc.stderr}")
+            if not std_path.exists() or std_path.stat().st_size == 0:
+                raise Exception(f"TTS std output missing: {std_path}")
+            std_path.replace(out_path)
+            raw_path.unlink(missing_ok=True)
+            faded_path.unlink(missing_ok=True)
+        # --- (Main logic) ---
+        # 1. Download all songs in parallel first
+        song_download_tasks = []
+        song_download_results = {}
+        for i, item in enumerate(timeline):
+            if item.get('type') == 'song' and 'song' in item:
+                song = item['song']
+                url = song.get('url')
+                start_override = song.get('start')
+                song_raw = job_dir / f"song_{i:03d}_raw.mp3"
+                song_download_tasks.append((i, url, song_raw, start_override))
+        def download_song_task(args):
+            i, url, song_raw, start_override = args
+            try:
+                download_random_youtube_audio(url, song_raw, start_override)
+                return (i, song_raw)
+            except Exception as e:
+                print(f"Error downloading {url}: {e}", file=sys.stderr)
+                return (i, None)
+        if song_download_tasks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
+                for future in concurrent.futures.as_completed(futures):
+                    i, song_raw = future.result()
+                    song_download_results[i] = song_raw
+
+        # 2. Process all timeline items in parallel (re-encode/generate/copy)
+        def process_item_task(args):
+            i, item = args
+            try:
+                if item.get('type') == 'song' and 'song' in item:
+                    song = item['song']
+                    url = song.get('url')
+                    song_raw = song_download_results.get(i)
+                    song_std = job_dir / f"song_{i:03d}.mp3"
+                    if song_raw and song_raw.exists():
+                        cmd = ["ffmpeg", "-y", "-i", str(song_raw), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
+                        subprocess.run(cmd, check=True)
+                        song_raw.unlink(missing_ok=True)
+                        return (i, song_std)
+                    else:
+                        print(f"Song download failed for {url}", file=sys.stderr)
+                        return (i, None)
+                elif item.get('type') == 'snippet' and 'snippet' in item:
+                    snippet = item['snippet']
+                    snippet_faded = job_dir / f"snippet_{i:03d}.mp3"
+                    if snippet.get('type') == 'upload' and snippet.get('audioUrl'):
+                        import re
+                        audio_url = snippet['audioUrl']
+                        match = re.match(r'data:audio/\w+;base64,(.*)', audio_url)
+                        b64data = match.group(1) if match else audio_url
+                        audio_bytes = base64.b64decode(b64data)
+                        temp_upload = job_dir / f"snippet_{i:03d}_upload"
+                        with open(temp_upload, 'wb') as f:
+                            f.write(audio_bytes)
+                        cmd = ["ffmpeg", "-y", "-i", str(temp_upload), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
+                        subprocess.run(cmd, check=True)
+                        temp_upload.unlink(missing_ok=True)
+                        return (i, snippet_faded)
+                    else:
+                        generate_tts_with_fade(snippet["text"], snippet.get("language", language), snippet_faded)
+                        return (i, snippet_faded)
+                elif item.get('type') == 'effect' and 'effect' in item:
+                    effect = item['effect']
+                    effect_id = effect.get('id')
+                    effect_meta = EFFECTS_MAP.get(effect_id)
+                    if effect_meta:
+                        filename = effect_meta['audioUrl'].split('/')[-1]
+                        effect_path = EFFECTS_DIR / filename
+                        if effect_path.exists():
+                            # Copy to job dir to avoid file lock issues
+                            effect_copy = job_dir / f"effect_{i:03d}.mp3"
+                            shutil.copy(effect_path, effect_copy)
+                            return (i, effect_copy)
+                        else:
+                            print(f"Effect file not found: {effect_path}", file=sys.stderr)
+                            return (i, None)
+                    else:
+                        print(f"Unknown effect id: {effect_id}", file=sys.stderr)
+                        return (i, None)
+            except Exception as e:
+                print(f"Error processing item {i}: {e}", file=sys.stderr)
+                return (i, None)
+
+        item_tasks = [(i, item) for i, item in enumerate(timeline)]
+        processed_results = {}
+        if item_tasks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(process_item_task, args) for args in item_tasks]
+                for future in concurrent.futures.as_completed(futures):
+                    i, out_path = future.result()
+                    processed_results[i] = out_path
+
+        # 3. Collect processed audio files in timeline order
+        audio_files = []
+        for i in range(len(timeline)):
+            out_path = processed_results.get(i)
+            if out_path and hasattr(out_path, 'exists') and out_path.exists():
+                audio_files.append(out_path)
+            else:
+                print(f"Skipping item {i} due to processing error", file=sys.stderr)
+        concat_list = job_dir / "concat.txt"
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for af in audio_files:
+                if not af.exists() or af.stat().st_size == 0:
+                    print(f"[WARN] File missing or empty before concat: {af}", file=sys.stderr)
+                f.write(f"file '{af.as_posix()}'\n")
+        output_mp3 = OUTPUT_DIR / f"club100_{job_id}.mp3"
+        cmd_concat = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c", "copy", str(output_mp3)]
+        subprocess.run(cmd_concat, check=True)
+        return str(output_mp3)
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <input.json>")
+        sys.exit(1)
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    output_path = process_audio(data)
+    print(output_path) 

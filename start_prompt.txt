@@ -1,0 +1,127 @@
+I want to build an app to generate a club 100 track
+
+A club 100 track is 100 songs strewn together, with small speech snippets saying "cheers" or "buttoms op!" or something relevant to the track.
+
+The idea is that you drink 100 sips of beer, one after each song snippet.
+
+I want to be able to generate these tracks on the fly, based on a theme, like indian theme where 100 indian songs would be segmented together with AI generated voices in between, or the ability to upload own snippets
+
+I want the output to first be a list of suggested songs, allowing the user to rearrange the songs and record their own snippets which should be spliced into the track.
+
+When the user accepts the output, the songs should be ripped from youtube automatically, and spliced together to a single track
+
+Provide me with a plan of how to implement this. 
+
+Ask me relevant followup questions before deciding on an implementation plan
+
+
+Questions with answers
+
+1. Song Sourcing & Copyright
+YouTube Downloading: Are you comfortable with the app downloading songs from YouTube (using tools like yt-dlp or youtube-dl)? This can have copyright implications, especially for public sharing.
+pick the best tool, i don't care about copyright, since it is for personal use.
+Song Length: Should each song be a full track, or just a short segment (e.g., 30 seconds, 1 minute) to keep the total length reasonable?
+The songs should be exactly 1 minute long snippets
+Themes: Do you want to support only YouTube as a source, or also allow users to upload their own music files?
+People should be able to upload their own songs, or come with requests
+2. Speech Snippets
+AI Voice Generation: Do you want to use a specific AI voice provider (e.g., ElevenLabs, Google TTS, Azure, OpenAI TTS), or should we pick the most accessible/free one?
+Pick the most accessible/free one
+User Recordings: Should users be able to record snippets directly in the browser/app, or upload pre-recorded files?
+The user should both be able to record directly in the browser/app and be able to upload pre-recorded files
+Languages/Accents: Any requirements for language, accent, or style for the AI-generated snippets?
+No requirements
+3. User Experience
+Frontend: Should this be a web app (React/Next.js), desktop app (Electron), or something else?
+A web app, using the supplied framework
+Song List Editing: Should users be able to search, add, remove, and reorder songs in the UI before generating the final track?
+Yes
+Snippets Editing: Should users be able to assign specific snippets to specific song transitions, or just have them inserted randomly? the user should have the possiblility of assigning specific snippets
+4. Output
+Audio Format: What output format do you want (MP3, WAV, etc.)?
+mp3
+Download/Share: Should users be able to download the final track, or also share it via a link?
+Both download and share
+Processing Time: Are you okay with the final track taking a few minutes to generate (since downloading and splicing 100 songs is resource-intensive)?
+Yes, that's fine
+5. Hosting & Scale
+Deployment: Do you plan to run this locally, on your own server, or as a public web service?
+host locally
+Resource Limits: Are there any constraints on server resources (CPU, storage, bandwidth)?
+None, go wild
+
+
+
+Implementation Plan
+1. Core Features & Flow
+User selects a theme or uploads/provides song requests.
+App generates a list of 100 songs (1 min each) from YouTube or user uploads.
+User can:
+Rearrange, add, remove, or search for songs.
+Upload or record speech snippets.
+Assign snippets to specific transitions.
+User confirms the list.
+Backend:
+Downloads 1-minute snippets from YouTube (yt-dlp).
+Processes user-uploaded songs.
+Generates/collects speech snippets (AI TTS or user audio).
+Splices everything together in order.
+Outputs a single MP3 file.
+Frontend:
+Allows user to download or share the final track.
+2. Tech Stack & Tools
+Frontend: Next.js 15 + React 19 (already in your repo)
+Backend: .NET 9 (API orchestration, job queue)
+Audio Processing: Python (ffmpeg, yt-dlp, TTS), called from .NET backend (via subprocess or gRPC)
+TTS: Google TTS (free, easy), fallback to other open/free TTS if needed
+Storage: Local disk (for audio files, temp processing)
+Sharing: Generate unique links (local server, not public)
+3. Detailed Steps
+A. Frontend (Next.js)
+Song Selection UI
+Search YouTube (call backend for results)
+Upload songs
+Drag-and-drop to reorder
+Remove/add songs
+Snippet Management
+Record audio (Web Audio API)
+Upload audio files
+Assign snippets to transitions (UI mapping)
+Track Preview
+Show list of songs + assigned snippets
+“Generate Track” button
+Download/Share
+Download MP3
+Shareable link (local server, e.g., /track/{id})
+B. Backend (.NET 9)
+API Endpoints
+Search YouTube (proxy to YouTube API or scrape)
+Accept song list, snippet assignments, and uploads
+Trigger track generation job
+Serve generated MP3 files
+Job Orchestration
+On “Generate Track”, enqueue a job (Hangfire)
+Call Python script for:
+Downloading 1-min snippets (yt-dlp + ffmpeg)
+Splicing audio (ffmpeg)
+Generating TTS snippets (Google TTS API)
+Combining everything into a single MP3
+Store result, return link to frontend
+C. Audio Processing (Python)
+Download 1-min YouTube snippets: yt-dlp + ffmpeg
+Splice audio: ffmpeg
+TTS: Google TTS (gTTS), fallback to other free TTS
+Combine all into MP3
+D. Storage & Sharing
+Store generated tracks and user uploads in a local directory
+Generate unique IDs for each track for sharing
+4. Key Challenges & Solutions
+YouTube Rate Limits: Use yt-dlp, handle errors gracefully, cache results if possible.
+Audio Processing Speed: Use background jobs (Hangfire), show progress in UI.
+Browser Audio Recording: Use Web Audio API, send blobs to backend.
+Large File Handling: Stream uploads/downloads, clean up old files periodically.
+📝 Next Steps
+Confirm you’re OK with Python for audio processing (best for yt-dlp, ffmpeg, TTS).
+Do you want to start with a minimal MVP (e.g., just YouTube + TTS, no uploads/recording), or build all features from the start?
+Any specific UI/UX ideas or references you want to follow?
+Once you confirm, I’ll break down the first implementation steps and suggest the initial file/folder structure and tasks!

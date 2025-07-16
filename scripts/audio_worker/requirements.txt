@@ -1,0 +1,6 @@
+yt-dlp
+ffmpeg-python
+gTTS
+Flask 
+flask-cors
+TTS
