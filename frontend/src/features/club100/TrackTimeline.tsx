@@ -17,6 +17,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { getEffectDataUrl } from './api';
 import { SortableTrackItem } from './SortableTrackItem';
 import { getYoutubeId } from './utils';
+import { TtsAddInput } from './TtsAddInput';
+import { EffectTimelineItem } from './EffectTimelineItem';
 
 export const TrackTimeline: React.FC<{
   items: TrackItem[];
@@ -281,59 +283,6 @@ export const TrackTimeline: React.FC<{
           -moz-appearance: textfield;
         }
       `}</style>
-    </div>
-  );
-};
-
-// TTS Add Input: only submit on blur or Enter
-const TtsAddInput: React.FC<{
-  value: string;
-  setValue: (v: string) => void;
-  onAdd: () => void;
-}> = ({ value, setValue, onAdd }) => {
-  return (
-    <input
-      value={value}
-      onChange={e => setValue(e.target.value)}
-      onBlur={() => {
-        if (value.trim()) onAdd();
-      }}
-      onKeyDown={e => {
-        if (e.key === 'Enter') {
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      placeholder="Enter TTS text..."
-      style={{ fontSize: 15, border: '1px solid #888', borderRadius: 4, padding: 4, marginRight: 8, width: 220 }}
-      autoFocus
-    />
-  );
-};
-
-// EffectTimelineItem: fetches and plays effect audio as data URL
-const EffectTimelineItem: React.FC<{ effect: Effect; onRemove: () => void }> = ({ effect, onRemove }) => {
-  const [audioUrl, setAudioUrl] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  React.useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    getEffectDataUrl(effect.id)
-      .then(url => { if (mounted) setAudioUrl(url); })
-      .catch(() => { if (mounted) setAudioUrl(null); })
-      .finally(() => { if (mounted) setLoading(false); });
-    return () => { mounted = false; };
-  }, [effect.id]);
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-      <span style={{ fontWeight: 'bold', color: '#333', fontSize: 18, flex: 1 }}>{effect.name}</span>
-      {loading ? (
-        <span style={{ marginRight: 8, color: '#888' }}>Loading...</span>
-      ) : audioUrl ? (
-        <audio controls src={audioUrl} style={{ marginRight: 8, height: 32, background: '#fff' }} />
-      ) : (
-        <span style={{ marginRight: 8, color: 'red' }}>Error</span>
-      )}
-      <button onClick={onRemove} style={{ color: 'red', fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#fff', padding: '2px 8px', cursor: 'pointer', boxShadow: '2px 2px 0 #000', marginLeft: 'auto' }}>✕</button>
     </div>
   );
 }; 

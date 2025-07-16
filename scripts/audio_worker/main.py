@@ -15,6 +15,7 @@ import uuid
 from server import db, Job
 import datetime
 from utils import extract_youtube_id, get_youtube_duration
+import logging
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 EFFECTS = [
@@ -297,7 +298,85 @@ def generate_tts_with_fade(text: str, lang: str, out_path: Path) -> None:
     raw_path.unlink(missing_ok=True)
     faded_path.unlink(missing_ok=True)
 
-# --- Main Processing Function ---
+def download_songs_parallel(timeline: list, job_dir: Path) -> dict:
+    """Download all songs in parallel and return a mapping of index to file path."""
+    song_download_tasks = []
+    for i, item in enumerate(timeline):
+        if item.get('type') == 'song' and 'song' in item:
+            song = item['song']
+            url = song.get('url')
+            start_override = song.get('start')
+            song_raw = job_dir / f"song_{i:03d}_raw.mp3"
+            song_download_tasks.append((i, url, song_raw, start_override))
+    song_download_results = {}
+    if song_download_tasks:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result is not None and isinstance(result, tuple) and len(result) == 2:
+                    i, song_raw = result
+                    if i is not None and song_raw is not None:
+                        song_download_results[i] = song_raw
+    return song_download_results
+
+def process_timeline_item(args) -> tuple:
+    """Process a single timeline item (song, snippet, or effect)."""
+    i, item, song_download_results, job_dir = args
+    try:
+        if item.get('type') == 'song' and 'song' in item:
+            song = item['song']
+            url = song.get('url')
+            song_raw = song_download_results.get(i)
+            song_std = job_dir / f"song_{i:03d}.mp3"
+            if song_raw and song_raw.exists():
+                cmd = ["ffmpeg", "-y", "-i", str(song_raw), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
+                subprocess.run(cmd, check=True)
+                song_raw.unlink(missing_ok=True)
+                return (i, song_std)
+            else:
+                logging.error(f"Song download failed for {url}")
+                return (i, None)
+        elif item.get('type') == 'snippet' and 'snippet' in item:
+            snippet = item['snippet']
+            snippet_faded = job_dir / f"snippet_{i:03d}.mp3"
+            if snippet.get('type') == 'upload' and snippet.get('audioUrl'):
+                import re
+                audio_url = snippet['audioUrl']
+                match = re.match(r'data:audio/\w+;base64,(.*)', audio_url)
+                b64data = match.group(1) if match else audio_url
+                audio_bytes = base64.b64decode(b64data)
+                temp_upload = job_dir / f"snippet_{i:03d}_upload"
+                with open(temp_upload, 'wb') as f:
+                    f.write(audio_bytes)
+                cmd = ["ffmpeg", "-y", "-i", str(temp_upload), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
+                subprocess.run(cmd, check=True)
+                temp_upload.unlink(missing_ok=True)
+                return (i, snippet_faded)
+            else:
+                generate_tts_with_fade(snippet["text"], snippet.get("language", "da"), snippet_faded)
+                return (i, snippet_faded)
+        elif item.get('type') == 'effect' and 'effect' in item:
+            effect = item['effect']
+            effect_id = effect.get('id')
+            effect_meta = EFFECTS_MAP.get(effect_id)
+            if effect_meta:
+                filename = effect_meta['audioUrl'].split('/')[-1]
+                effect_path = EFFECTS_DIR / filename
+                if effect_path.exists():
+                    effect_copy = job_dir / f"effect_{i:03d}.mp3"
+                    shutil.copy(effect_path, effect_copy)
+                    return (i, effect_copy)
+                else:
+                    logging.error(f"Effect file not found: {effect_path}")
+                    return (i, None)
+            else:
+                logging.error(f"Unknown effect id: {effect_id}")
+                return (i, None)
+    except Exception as e:
+        logging.error(f"Error processing item {i}: {e}")
+        return (i, None)
+
 def process_audio(data: dict) -> str:
     """Process the timeline and generate the final audio file. Returns output path."""
     timeline = data.get("timeline", [])
@@ -307,120 +386,32 @@ def process_audio(data: dict) -> str:
     job_dir.mkdir(exist_ok=True)
     audio_files = []
     try:
-        # 1. Download all songs in parallel first
-        song_download_tasks = []
-        song_download_results = {}
-        for i, item in enumerate(timeline):
-            if item.get('type') == 'song' and 'song' in item:
-                song = item['song']
-                url = song.get('url')
-                start_override = song.get('start')
-                song_raw = job_dir / f"song_{i:03d}_raw.mp3"
-                song_download_tasks.append((i, url, song_raw, start_override))
-        def download_song_task(args):
-            i, url, song_raw, start_override = args
-            try:
-                download_random_youtube_audio(url, song_raw, start_override)
-                return (i, song_raw)
-            except Exception as e:
-                print(f"Error downloading {url}: {e}", file=sys.stderr)
-                return (i, None)
-        if song_download_tasks:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
-                for future in concurrent.futures.as_completed(futures):
-                    result = future.result()
-                    if result is not None and isinstance(result, tuple) and len(result) == 2:
-                        i, song_raw = result
-                        if i is not None and song_raw is not None:
-                            song_download_results[i] = song_raw
-
-        # 2. Process all timeline items in parallel (re-encode/generate/copy)
-        def process_item_task(args):
-            i, item = args
-            try:
-                if item.get('type') == 'song' and 'song' in item:
-                    song = item['song']
-                    url = song.get('url')
-                    song_raw = song_download_results.get(i)
-                    song_std = job_dir / f"song_{i:03d}.mp3"
-                    if song_raw and song_raw.exists():
-                        cmd = ["ffmpeg", "-y", "-i", str(song_raw), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
-                        subprocess.run(cmd, check=True)
-                        song_raw.unlink(missing_ok=True)
-                        return (i, song_std)
-                    else:
-                        print(f"Song download failed for {url}", file=sys.stderr)
-                        return (i, None)
-                elif item.get('type') == 'snippet' and 'snippet' in item:
-                    snippet = item['snippet']
-                    snippet_faded = job_dir / f"snippet_{i:03d}.mp3"
-                    if snippet.get('type') == 'upload' and snippet.get('audioUrl'):
-                        import re
-                        audio_url = snippet['audioUrl']
-                        match = re.match(r'data:audio/\w+;base64,(.*)', audio_url)
-                        b64data = match.group(1) if match else audio_url
-                        audio_bytes = base64.b64decode(b64data)
-                        temp_upload = job_dir / f"snippet_{i:03d}_upload"
-                        with open(temp_upload, 'wb') as f:
-                            f.write(audio_bytes)
-                        cmd = ["ffmpeg", "-y", "-i", str(temp_upload), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
-                        subprocess.run(cmd, check=True)
-                        temp_upload.unlink(missing_ok=True)
-                        return (i, snippet_faded)
-                    else:
-                        generate_tts_with_fade(snippet["text"], snippet.get("language", language), snippet_faded)
-                        return (i, snippet_faded)
-                elif item.get('type') == 'effect' and 'effect' in item:
-                    effect = item['effect']
-                    effect_id = effect.get('id')
-                    effect_meta = EFFECTS_MAP.get(effect_id)
-                    if effect_meta:
-                        filename = effect_meta['audioUrl'].split('/')[-1]
-                        effect_path = EFFECTS_DIR / filename
-                        if effect_path.exists():
-                            # Copy to job dir to avoid file lock issues
-                            effect_copy = job_dir / f"effect_{i:03d}.mp3"
-                            shutil.copy(effect_path, effect_copy)
-                            return (i, effect_copy)
-                        else:
-                            print(f"Effect file not found: {effect_path}", file=sys.stderr)
-                            return (i, None)
-                    else:
-                        print(f"Unknown effect id: {effect_id}", file=sys.stderr)
-                        return (i, None)
-            except Exception as e:
-                print(f"Error processing item {i}: {e}", file=sys.stderr)
-                return (i, None)
-
-        item_tasks = [(i, item) for i, item in enumerate(timeline)]
+        song_download_results = download_songs_parallel(timeline, job_dir)
+        item_tasks = [(i, item, song_download_results, job_dir) for i, item in enumerate(timeline)]
         processed_results = {}
         if item_tasks:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(process_item_task, args) for args in item_tasks]
+                futures = [executor.submit(process_timeline_item, args) for args in item_tasks]
                 for future in concurrent.futures.as_completed(futures):
                     result = future.result()
                     if result is not None and isinstance(result, tuple) and len(result) == 2:
                         i, out_path = result
                         if i is not None and out_path is not None:
                             processed_results[i] = out_path
-
-        # 3. Collect processed audio files in timeline order
         audio_files = []
         for i in range(len(timeline)):
             out_path = processed_results.get(i)
             if out_path and hasattr(out_path, 'exists') and out_path.exists():
                 audio_files.append(out_path)
             else:
-                print(f"Skipping item {i} due to processing error", file=sys.stderr)
+                logging.warning(f"Skipping item {i} due to processing error")
         concat_list = job_dir / "concat.txt"
         with open(concat_list, "w", encoding="utf-8") as f:
             for af in audio_files:
                 if not af.exists() or af.stat().st_size == 0:
-                    print(f"[WARN] File missing or empty before concat: {af}", file=sys.stderr)
+                    logging.warning(f"[WARN] File missing or empty before concat: {af}")
                 f.write(f"file '{af.as_posix()}'\n")
         output_mp3 = OUTPUT_DIR / f"club100_{job_id}.mp3"
-        # Re-encode the concatenated audio to ensure valid MP3 output
         cmd_concat = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
             "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(output_mp3)
@@ -429,7 +420,6 @@ def process_audio(data: dict) -> str:
         job = Job(id=job_id, status='done', output_path=str(output_mp3), created_at=datetime.datetime.utcnow())
         db.session.add(job)
         db.session.commit()
-        # Cache invalidation: remove files older than 7 days
         now = datetime.datetime.now()
         for f in CACHE_DIR.glob('*.m4a'):
             if f.stat().st_mtime < (now - datetime.timedelta(days=7)).timestamp():
