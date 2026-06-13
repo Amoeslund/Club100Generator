@@ -1,55 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-// Song type for type safety
-interface Song {
-  url: string;
-  title: string;
-  artist?: string;
-  thumbnail?: string;
-}
-
-interface YoutubeApiId {
-  videoId: string;
-}
-interface YoutubeApiSnippet {
-  title: string;
-  channelTitle: string;
-  thumbnails?: { default?: { url?: string } };
-}
-interface YoutubeApiItem {
-  id: YoutubeApiId;
-  snippet: YoutubeApiSnippet;
-}
+import {
+  Song,
+  isQuotaExceededError,
+  mapYoutubeApiItems,
+  firstNonEmpty,
+} from './youtube';
 
 const YT_API_KEY = process.env.NEXT_YOUTUBE_API_KEY;
-
-function isQuotaExceededError(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'error' in err &&
-    typeof (err as { error?: unknown }).error === 'object' &&
-    Array.isArray((err as { error?: { errors?: unknown[] } }).error?.errors) &&
-    ((err as { error: { errors: { reason?: string }[] } }).error.errors[0]?.reason === 'quotaExceeded')
-  );
-}
-
-function isYoutubeApiItem(item: unknown): item is YoutubeApiItem {
-  return (
-    typeof item === 'object' &&
-    item !== null &&
-    'id' in item &&
-    typeof (item as { id?: unknown }).id === 'object' &&
-    (item as { id: { videoId?: string } }).id?.videoId !== undefined &&
-    'snippet' in item &&
-    typeof (item as { snippet?: unknown }).snippet === 'object' &&
-    (item as { snippet: { title?: string; channelTitle?: string } }).snippet?.title !== undefined &&
-    (item as { snippet: { title?: string; channelTitle?: string } }).snippet?.channelTitle !== undefined
-  );
-}
+const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:5001';
 
 async function ytDlpSearch(query: string): Promise<Song[]> {
-  const res = await fetch('http://localhost:5001/ytsearch', {
+  const res = await fetch(`${BACKEND_URL}/ytsearch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
@@ -68,20 +29,7 @@ async function youtubeApiSearch(query: string): Promise<Song[]> {
     throw new Error('YouTube API error');
   }
   const data = await ytRes.json();
-  const songs: Song[] = Array.isArray(data.items)
-    ? data.items.map((item: unknown) => {
-        if (isYoutubeApiItem(item)) {
-          return {
-            url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-            title: item.snippet.title,
-            artist: item.snippet.channelTitle,
-            thumbnail: item.snippet.thumbnails?.default?.url,
-          };
-        }
-        return null;
-      }).filter(Boolean) as Song[]
-    : [];
-  return songs;
+  return mapYoutubeApiItems(data.items);
 }
 
 export async function POST(req: NextRequest) {
@@ -90,41 +38,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing query' }, { status: 400 });
   }
 
-  // Run both searches in parallel, return the first successful result with songs
-  const promises: Promise<{ source: string; songs: Song[] }> [] = [];
-  if (YT_API_KEY) {
-    promises.push(
-      youtubeApiSearch(query)
-        .then(songs => ({ source: 'youtube', songs }))
-        .catch(() => { throw new Error('youtube-failed'); })
-    );
-  }
-  promises.push(
-    ytDlpSearch(query)
-      .then(songs => ({ source: 'ytdlp', songs }))
-      .catch(() => { throw new Error('ytdlp-failed'); })
-    );
+  // Try the Data API first (if configured), then fall back to yt-dlp. The first
+  // method that returns results wins; failures are treated as empty.
+  const searches: Promise<Song[]>[] = [];
+  if (YT_API_KEY) searches.push(youtubeApiSearch(query));
+  searches.push(ytDlpSearch(query));
 
-  try {
-    const results = await Promise.any(promises);
-    if (results.songs && results.songs.length > 0) {
-      return NextResponse.json(results.songs);
-    }
-    // If first to resolve is empty, wait for the other
-    // Remove the resolved promise and await the other
-    const remainingPromises = promises.length === 2
-      ? promises.filter(p => p !== Promise.resolve(results))
-      : promises;
-    if (remainingPromises.length > 0) {
-      try {
-        const other = await Promise.race(remainingPromises);
-        if (other.songs && other.songs.length > 0) {
-          return NextResponse.json(other.songs);
-        }
-      } catch {}
-    }
-    return NextResponse.json([], { status: 200 });
-  } catch {
-    return NextResponse.json({ error: 'All search methods failed' }, { status: 500 });
-  }
-} 
+  const songs = await firstNonEmpty(searches);
+  return NextResponse.json(songs);
+}

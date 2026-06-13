@@ -6,7 +6,7 @@ A web app for generating custom Club 100 tracks by combining YouTube songs, snip
 
 ## Features
 - Search and add YouTube songs to a timeline
-- Add TTS or uploaded/recorded snippets
+- Add uploaded/recorded audio snippets
 - Add meme sound effects (e.g., Vine Boom)
 - Mass import songs by URL or title
 - Drag-and-drop timeline editing
@@ -98,7 +98,39 @@ yarn dev
 - The backend must be running for the frontend to work.
 - For YouTube search, the app uses both the YouTube Data API (if API key is set) and yt-dlp fallback.
 - Effects are stored in `scripts/audio_worker/effects/`.
-- Output MP3s are saved in `scripts/audio_worker/output/`.
+- Output MP3s are saved in `scripts/audio_worker/output/` (files older than 1h are auto-pruned; downloads are cached in `cache/` for 24h).
+
+---
+
+## Configuration (environment variables)
+
+### Backend (`scripts/audio_worker/server.py`)
+- `ALLOWED_ORIGINS` — comma-separated CORS allowlist (default `http://localhost:3000`).
+- `HOST` / `PORT` — bind address/port (default `127.0.0.1:5001`).
+- `FLASK_DEBUG` — set to `1` to enable the debugger (local dev only; off by default).
+- `MAX_CONTENT_LENGTH` — max request body in bytes (default 100 MB).
+- `YTDLP_TIMEOUT` / `FFMPEG_TIMEOUT` — subprocess timeouts in seconds.
+
+### Frontend
+- `NEXT_PUBLIC_BACKEND_URL` — base URL of the Python backend (default `http://localhost:5001`).
+- `NEXT_YOUTUBE_API_KEY` — optional YouTube Data API v3 key (see below).
+
+---
+
+## Testing
+
+### Backend (pytest)
+```sh
+cd scripts/audio_worker
+pip install -r requirements-dev.txt
+pytest
+```
+
+### Frontend (vitest)
+```sh
+cd frontend
+npm test
+```
 
 ---
 

@@ -17,8 +17,8 @@ export const SongSearch: React.FC<{
     try {
       const res = await youtubeSearch(query);
       setResults(res);
-    } catch (e: any) {
-      setError(e.message || 'Search failed');
+    } catch (e: unknown) {
+      setError((e as Error).message || 'Search failed');
     } finally {
       setLoading(false);
     }

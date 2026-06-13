@@ -1,17 +1,21 @@
 from flask import Flask, request, jsonify, send_file
 from flask import send_from_directory
-import tempfile
 import os
-import json
+import re
 import subprocess
 import traceback
 import pathlib
-import base64
 from main import process_audio, EFFECTS
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+
+# Restrict CORS to configured origins (comma-separated). Defaults to the local dev frontend.
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',') if o.strip()]
+CORS(app, origins=ALLOWED_ORIGINS)
+
+# Cap request body size (uploaded snippets arrive as base64 data URLs).
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(100 * 1024 * 1024)))
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 
@@ -39,48 +43,31 @@ def serve_effect(filename):
     """Serve an effect audio file by filename."""
     return send_from_directory(EFFECTS_DIR, filename)
 
-@app.route('/effects/<effect_id>/data', methods=['GET'])
-def effect_data(effect_id):
-    """Return base64 data URL for a given effect ID."""
-    effect = next((e for e in EFFECTS if e['id'] == effect_id), None)
-    if not effect:
-        return jsonify({'error': 'Effect not found'}), 404
-    file_path = EFFECTS_DIR / effect['audioUrl'].split('/')[-1]
-    if not file_path.exists():
-        return jsonify({'error': 'File not found'}), 404
-    with open(file_path, 'rb') as f:
-        b64 = base64.b64encode(f.read()).decode('utf-8')
-    mime = 'audio/mpeg' if file_path.suffix == '.mp3' else 'audio/wav'
-    data_url = f'data:{mime};base64,{b64}'
-    return jsonify({'dataUrl': data_url})
-
 @app.route('/generate', methods=['POST'])
 def generate():
     """Generate audio from a timeline or legacy format."""
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid or missing JSON body"}), 400
     if 'timeline' not in data:
         data['timeline'] = build_timeline_from_legacy(data)
     try:
         output_path = process_audio(data)
-        print(f"DEBUG: output_path = {output_path}")
-        if not output_path:
-            print("DEBUG: output_path is None or empty!")
+        if not output_path or not os.path.exists(output_path):
             return jsonify({"error": "Audio generation failed, no output file was produced."}), 500
-        if not os.path.exists(output_path):
-            print(f"DEBUG: File does not exist at {output_path}")
-        else:
-            print(f"DEBUG: File exists at {output_path}, size: {os.path.getsize(output_path)} bytes")
         job_id = os.path.basename(output_path).replace('club100_', '').replace('.mp3', '')
-        print(f"DEBUG: job_id = {job_id}")
-        return jsonify({"output": output_path, "jobId": job_id})
+        return jsonify({"jobId": job_id})
     except Exception as e:
-        tb = traceback.format_exc()
-        print(tb)
-        return jsonify({"error": str(e), "traceback": tb}), 500
+        # Log the full traceback server-side, but don't leak internals to the client.
+        print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/download/<job_id>', methods=['GET'])
 def download(job_id):
     """Download the generated audio file by job ID."""
+    # job_id is a UUID; reject anything else to avoid path traversal.
+    if not re.fullmatch(r'[0-9a-fA-F-]{36}', job_id):
+        return jsonify({"error": "Invalid job id"}), 400
     output_dir = os.path.join(os.path.dirname(__file__), 'output')
     file_path = os.path.join(output_dir, f'club100_{job_id}.mp3')
     if not os.path.exists(file_path):
@@ -90,9 +77,9 @@ def download(job_id):
 @app.route('/ytsearch', methods=['POST'])
 def ytsearch():
     """Search YouTube for songs using yt-dlp."""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     query = data.get('query')
-    if not query:
+    if not query or not isinstance(query, str):
         return jsonify({'error': 'Missing query'}), 400
     try:
         result = subprocess.run(
@@ -102,7 +89,7 @@ def ytsearch():
                 '--print', '%(id)s\t%(title)s\t%(uploader)s\t%(thumbnail)s',
                 query
             ],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, check=True, timeout=120
         )
         lines = result.stdout.strip().split('\n')
         songs = []
@@ -115,11 +102,14 @@ def ytsearch():
                     'artist': parts[2] if len(parts) > 2 else '',
                     'thumbnail': parts[3] if len(parts) > 3 else ''
                 }
-                print(song)
                 songs.append(song)
         return jsonify(songs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True) 
+    # debug defaults off; opt in with FLASK_DEBUG=1 for local development only.
+    debug = os.environ.get('FLASK_DEBUG', '').lower() in ('1', 'true', 'yes')
+    host = os.environ.get('HOST', '127.0.0.1')
+    port = int(os.environ.get('PORT', '5001'))
+    app.run(host=host, port=port, debug=debug)
