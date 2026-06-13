@@ -1,26 +1,35 @@
 import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
-import { getSnippets, generateTrack, youtubeSearch, getEffects } from './api';
-import { LanguageSelector } from './LanguageSelector';
+import { generateTrack, youtubeSearch, getEffects } from './api';
 import { GenerateButton } from './GenerateButton';
 import { SongSearch } from './SongSearch';
+import {
+  addSong,
+  insertAfter,
+  removeAt,
+  moveItem,
+  updateAt,
+  injectAutoEffect,
+  ensureIds,
+  songItem,
+  snippetItem,
+  effectItem,
+  parseImportLine,
+} from './timeline';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
+const DEMO_SONGS: Song[] = [
+  { url: 'https://www.youtube.com/watch?v=2Vv-BfVoq4g', title: 'Ed Sheeran - Perfect' },
+  { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Rick Astley - Never Gonna Give You Up' },
+];
+
 export const Club100Page: React.FC = () => {
-  // Load from localStorage if present
-  const [language, setLanguage] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('club100_language');
-      if (saved) return saved;
-    }
-    return 'da';
-  });
   const [trackItems, setTrackItems] = useState<TrackItem[]>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('club100_trackItems');
       if (saved) {
         try {
-          return JSON.parse(saved);
+          return ensureIds(JSON.parse(saved));
         } catch {}
       }
     }
@@ -32,7 +41,6 @@ export const Club100Page: React.FC = () => {
     }
     return '';
   });
-  // Unified timeline state
   const [job, setJob] = useState<Club100Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,79 +53,33 @@ export const Club100Page: React.FC = () => {
   }, [trackItems]);
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('club100_language', language);
-    }
-  }, [language]);
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
       localStorage.setItem('club100_importText', importText);
     }
   }, [importText]);
 
-  // On language change, initialize with interleaved demo data if empty
+  // Seed the timeline with demo songs once if it starts empty.
   useEffect(() => {
-    if (trackItems.length === 0) {
-      getSnippets(language).then(snippets => {
-        // Demo: interleave default songs and snippets
-        const demoSongs: Song[] = [
-          { url: 'https://www.youtube.com/watch?v=2Vv-BfVoq4g', title: 'Ed Sheeran - Perfect' },
-          { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Rick Astley - Never Gonna Give You Up' },
-        ];
-        const items: TrackItem[] = [];
-        for (let i = 0; i < Math.max(demoSongs.length, snippets.length); i++) {
-          if (demoSongs[i]) items.push({ type: 'song', song: demoSongs[i] });
-          if (snippets[i]) items.push({ type: 'snippet', snippet: snippets[i] });
-        }
-        setTrackItems(items);
-      });
-    }
-  }, [language]);
+    setTrackItems(prev => (prev.length === 0 ? DEMO_SONGS.map(songItem) : prev));
+  }, []);
 
-  // Add song after last song or at end
-  const handleAddSong = (song: Song) => {
-    let idx = -1;
-    for (let i = trackItems.length - 1; i >= 0; i--) {
-      if (trackItems[i].type === 'song') { idx = i; break; }
-    }
-    const newItems = [...trackItems];
-    newItems.splice(idx + 1, 0, { type: 'song', song });
-    setTrackItems(newItems);
-  };
-  // Add snippet at a specific index
-  const handleAddSnippet = (snippet: Snippet, idx: number) => {
-    const newItems = [...trackItems];
-    newItems.splice(idx + 1, 0, { type: 'snippet', snippet });
-    setTrackItems(newItems);
-  };
-  // Update item (edit)
-  const handleUpdateItem = (idx: number, item: TrackItem) => {
-    const updated = [...trackItems];
-    updated[idx] = item;
-    setTrackItems(updated);
-  };
-  // Remove item
-  const handleRemoveItem = (idx: number) => {
-    setTrackItems(trackItems.filter((_, i) => i !== idx));
-  };
-  // Move item
-  const handleMoveItem = (from: number, to: number) => {
-    if (to < 0 || to >= trackItems.length) return;
-    const updated = [...trackItems];
-    const [item] = updated.splice(from, 1);
-    updated.splice(to, 0, item);
-    setTrackItems(updated);
-  };
+  const handleAddSong = (song: Song) => setTrackItems(prev => addSong(prev, song));
+  const handleAddSnippet = (snippet: Snippet, idx: number) =>
+    setTrackItems(prev => insertAfter(prev, snippetItem(snippet), idx));
+  const handleAddEffect = (effect: Effect, idx: number) =>
+    setTrackItems(prev => insertAfter(prev, effectItem(effect), idx));
+  const handleUpdateItem = (idx: number, item: TrackItem) => setTrackItems(prev => updateAt(prev, idx, item));
+  const handleRemoveItem = (idx: number) => setTrackItems(prev => removeAt(prev, idx));
+  const handleMoveItem = (from: number, to: number) => setTrackItems(prev => moveItem(prev, from, to));
 
   const handleGenerate = async () => {
     setLoading(true);
     setError(null);
     setJob(null);
     try {
-      // Inject auto effect after every song if selected
       const autoEffect = effects.find(e => e.id === autoEffectId);
-      const timelineWithEffects = autoEffectId ? injectAutoEffect(trackItems, autoEffect) : trackItems;
-      const job = await generateTrack({ timeline: timelineWithEffects, language });
-      setJob(job);
+      const timeline = autoEffectId ? injectAutoEffect(trackItems, autoEffect) : trackItems;
+      const result = await generateTrack({ timeline });
+      setJob(result);
     } catch (e: unknown) {
       setError((e as Error).message || 'Failed to generate track');
     } finally {
@@ -132,58 +94,48 @@ export const Club100Page: React.FC = () => {
   const handleMassImport = async () => {
     setImportLoading(true);
     setImportResult(null);
-    setImportProgress({ current: 0, total: 0 });
-    // Each line: url [tab or comma or space] title (optional) OR just a title
     const lines = importText.split('\n').map(l => l.trim()).filter(Boolean);
     setImportProgress({ current: 0, total: lines.length });
+    let processed = 0;
+    const bump = () => {
+      processed += 1;
+      setImportProgress({ current: processed, total: lines.length });
+    };
+    // Resolve every line (in parallel), preserving order via index.
+    const results = await Promise.all(
+      lines.map(async (line, index) => {
+        const parsed = parseImportLine(line);
+        if (!parsed) {
+          bump();
+          return { song: null as Song | null, label: line, index };
+        }
+        if (parsed.kind === 'url') {
+          bump();
+          return { song: parsed.song, label: parsed.song.title, index };
+        }
+        try {
+          const found = await youtubeSearch(parsed.query);
+          bump();
+          return { song: found?.[0] ?? null, label: parsed.query, index };
+        } catch {
+          bump();
+          return { song: null as Song | null, label: parsed.query, index };
+        }
+      }),
+    );
+    results.sort((a, b) => a.index - b.index);
     const found: string[] = [];
     const notFound: string[] = [];
-    let processed = 0;
-    // Prepare all search promises, each returns {song, found, index}
-    const searchPromises = lines.map((line, index) => (async () => {
-      // Try to split by tab, then comma, then space
-      const [first, ...rest] = line.split(/\t|,|\s{2,}/);
-      const isUrl = first.startsWith('http');
-      if (isUrl) {
-        const urlTrimmed = first.trim();
-        const title = rest.join(' ').trim();
-        processed++;
-        setImportProgress({ current: processed, total: lines.length });
-        return { song: { url: urlTrimmed, title: title || urlTrimmed }, found: title || urlTrimmed, notFound: null, index };
-      } else {
-        // Treat as search query
-        try {
-          const results = await youtubeSearch(line);
-          processed++;
-          setImportProgress({ current: processed, total: lines.length });
-          if (results && results.length > 0) {
-            return { song: results[0], found: line, notFound: null, index };
-          } else {
-            return { song: null, found: null, notFound: line, index };
-          }
-        } catch {
-          processed++;
-          setImportProgress({ current: processed, total: lines.length });
-          return { song: null, found: null, notFound: line, index };
-        }
-      }
-    })());
-    const results = await Promise.all(searchPromises);
-    // Sort by index to preserve order
-    results.sort((a, b) => a.index - b.index);
     const imported: Song[] = [];
     for (const r of results) {
       if (r.song) {
         imported.push(r.song);
-        found.push(r.found!);
-      } else if (r.notFound) {
-        notFound.push(r.notFound);
+        found.push(r.label);
+      } else {
+        notFound.push(r.label);
       }
     }
-    setTrackItems(prev => [
-      ...prev,
-      ...imported.map(s => ({ type: 'song' as const, song: s }))
-    ]);
+    setTrackItems(prev => [...prev, ...imported.map(songItem)]);
     setImportText('');
     setImportResult({ found, notFound });
     setImportLoading(false);
@@ -197,32 +149,13 @@ export const Club100Page: React.FC = () => {
   }, []);
   const [addEffectIdx, setAddEffectIdx] = useState<number | null>(null);
   const [selectedEffectId, setSelectedEffectId] = useState<string>('');
-  const handleAddEffect = (effect: Effect, idx: number) => {
-    const newItems = [...trackItems];
-    newItems.splice(idx + 1, 0, { type: 'effect', effect });
-    setTrackItems(newItems);
-  };
 
   // Auto effect after each song
   const [autoEffectId, setAutoEffectId] = useState<string>('');
 
-  // Helper to inject effect after every song (including after last song)
-  function injectAutoEffect(timeline: TrackItem[], effect: Effect | undefined): TrackItem[] {
-    if (!effect) return timeline;
-    const result: TrackItem[] = [];
-    for (let i = 0; i < timeline.length; i++) {
-      result.push(timeline[i]);
-      if (timeline[i].type === 'song') {
-        result.push({ type: 'effect', effect });
-      }
-    }
-    return result;
-  }
-
   return (
     <div style={{ maxWidth: 600, margin: '40px auto', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
       <h1 style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 16 }}>Club 100 Generator</h1>
-      <LanguageSelector value={language} onChange={setLanguage} />
       <SongSearch onAdd={handleAddSong} />
       {/* Auto effect after each song */}
       <div style={{ border: '3px solid #000', borderRadius: 8, background: '#fffbe6', padding: 12, marginBottom: 16 }}>
@@ -259,7 +192,7 @@ export const Club100Page: React.FC = () => {
           <div style={{ marginTop: 8, color: '#333', fontWeight: 'bold' }}>
             Importing: {importProgress.current} / {importProgress.total}
             <div style={{ height: 8, background: '#eee', borderRadius: 4, marginTop: 4, width: '100%' }}>
-              <div style={{ height: 8, background: '#baffc9', borderRadius: 4, width: `${(importProgress.current / importProgress.total) * 100}%`, transition: 'width 0.2s' }} />
+              <div style={{ height: 8, background: '#baffc9', borderRadius: 4, width: `${importProgress.total ? (importProgress.current / importProgress.total) * 100 : 0}%`, transition: 'width 0.2s' }} />
             </div>
           </div>
         )}
@@ -286,7 +219,7 @@ export const Club100Page: React.FC = () => {
           onMoveItem={handleMoveItem}
           onAddSong={handleAddSong}
           onAddSnippet={handleAddSnippet}
-          onAddEffect={(effect, idx) => handleAddEffect(effect, idx)}
+          onAddEffect={handleAddEffect}
           effects={effects}
           addEffectIdx={addEffectIdx}
           setAddEffectIdx={setAddEffectIdx}

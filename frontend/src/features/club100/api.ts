@@ -1,24 +1,8 @@
-import { Snippet, Club100Job, Song, TrackItem } from './types';
-import type { Effect } from './types';
+import { Club100Job, Song, TrackItem, Effect } from './types';
+import { BACKEND_URL } from './config';
 
-const PY_BACKEND = 'http://localhost:5001';
-
-// Local fallback for snippets
-const SNIPPETS: Record<string, Snippet[]> = {
-  da: [
-  ],
-  en: [],
-};
-
-export async function getSnippets(language: string): Promise<Snippet[]> {
-  return SNIPPETS[language] || SNIPPETS['da'];
-}
-
-export async function generateTrack(payload: {
-  timeline: TrackItem[];
-  language: string;
-}): Promise<Club100Job> {
-  const res = await fetch(`${PY_BACKEND}/generate`, {
+export async function generateTrack(payload: { timeline: TrackItem[] }): Promise<Club100Job> {
+  const res = await fetch(`${BACKEND_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -28,24 +12,23 @@ export async function generateTrack(payload: {
   return {
     jobId: data.jobId,
     status: 'done', // Python backend is synchronous for now
-    downloadUrl: `${PY_BACKEND}/download/${data.jobId}`,
-    workerOutput: data.output,
+    downloadUrl: `${BACKEND_URL}/download/${data.jobId}`,
   };
 }
 
 export function getDownloadUrl(jobId: string): string {
-  return `${PY_BACKEND}/download/${jobId}`;
+  return `${BACKEND_URL}/download/${jobId}`;
 }
 
 // --- YouTube Search ---
 /**
- * Search YouTube for songs using the Data API v3.
- * Requires NEXT_PUBLIC_YT_API_KEY in .env.local
+ * Search YouTube for songs via the Next.js `/api/youtube-search` route, which
+ * uses the YouTube Data API (if NEXT_YOUTUBE_API_KEY is set) and falls back to yt-dlp.
+ * Results are cached in localStorage for 24h.
  */
 export async function youtubeSearch(query: string): Promise<Song[]> {
-  // Caching: use localStorage, key is 'ytsearch_' + query
+  const cacheKey = 'ytsearch_' + encodeURIComponent(query.trim().toLowerCase());
   if (typeof window !== 'undefined') {
-    const cacheKey = 'ytsearch_' + encodeURIComponent(query.trim().toLowerCase());
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       try {
@@ -64,21 +47,18 @@ export async function youtubeSearch(query: string): Promise<Song[]> {
   if (!res.ok) throw new Error('Search failed');
   const results = await res.json();
   if (typeof window !== 'undefined') {
-    const cacheKey = 'ytsearch_' + encodeURIComponent(query.trim().toLowerCase());
     localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), results }));
   }
   return results;
 }
 
 export async function getEffects(): Promise<Effect[]> {
-  const res = await fetch('http://localhost:5001/effects');
+  const res = await fetch(`${BACKEND_URL}/effects`);
   if (!res.ok) throw new Error('Failed to fetch effects');
   return res.json();
 }
 
-export async function getEffectDataUrl(effectId: string): Promise<string> {
-  const res = await fetch(`http://localhost:5001/effects/${effectId}/data`);
-  if (!res.ok) throw new Error('Failed to fetch effect data');
-  const data = await res.json();
-  return data.dataUrl;
-} 
+/** Direct, cacheable URL to an effect's audio file served by the backend. */
+export function getEffectAudioUrl(effect: Effect): string {
+  return `${BACKEND_URL}${effect.audioUrl}`;
+}
