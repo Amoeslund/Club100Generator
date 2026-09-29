@@ -3,7 +3,7 @@ import re
 import urllib.request
 from urllib.parse import urlparse
 
-from main import EFFECTS_DIR, EFFECTS_MAP, add_custom_effect
+from main import EFFECTS_DIR, EFFECTS_MAP, _get_cache_lock, add_custom_effect
 
 # myinstants sits behind Cloudflare, which rejects requests without a browser-like User-Agent
 HEADERS = {
@@ -38,9 +38,14 @@ def import_myinstants(page_url):
         raise ValueError('Link must point to a myinstants instant page (/instant/...)')
     slug = m.group(1).lower()
     effect_id = 'mi_' + slug.replace('-', '_')
-    if effect_id in EFFECTS_MAP:
-        return EFFECTS_MAP[effect_id], False
+    # Serialize imports of the same instant so a double submit doesn't fetch and register it twice
+    with _get_cache_lock(f'effect:{effect_id}'):
+        if effect_id in EFFECTS_MAP:
+            return EFFECTS_MAP[effect_id], False
+        return _download_effect(page_url, slug, effect_id), True
 
+
+def _download_effect(page_url, slug, effect_id):
     page = _fetch(page_url).decode('utf-8', 'ignore')
     audio = re.search(r'<meta\s+property="og:audio"\s+content="([^"]+)"', page)
     if not audio:
@@ -58,6 +63,4 @@ def import_myinstants(page_url):
     filename = f'mi-{slug}.mp3'
     (EFFECTS_DIR / filename).write_bytes(data)
 
-    effect = {'id': effect_id, 'name': name, 'audioUrl': f'/effects/{filename}'}
-    add_custom_effect(effect)
-    return effect, True
+    return add_custom_effect({'id': effect_id, 'name': name, 'audioUrl': f'/effects/{filename}'})

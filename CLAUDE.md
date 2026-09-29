@@ -18,6 +18,7 @@ Backend (from `scripts/audio_worker/`):
 uv venv --python 3.11 venv
 uv pip install --python venv/Scripts/python.exe --exclude-newer <date 3+ days ago> -r requirements-dev.txt
 venv/Scripts/python.exe server.py                   # :5001, binds 127.0.0.1, debug off unless FLASK_DEBUG=1
+venv/Scripts/python.exe prefetch.py "../../klovne songs med timestamps.txt"   # download a mass-import list into the cache
 venv/Scripts/python.exe -m pytest                   # all backend tests
 venv/Scripts/python.exe -m pytest tests/test_server.py -k BestStart   # single test class
 ```
@@ -36,7 +37,7 @@ npm run build
 
 Organization policy: any package manager config must require packages to be at least 3 days old (supply-chain protection). `frontend/.npmrc` sets `min-release-age=3`; for uv, pass `--exclude-newer`.
 
-Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HOST`, `PORT`, `FLASK_DEBUG`, `MAX_CONTENT_LENGTH`, `YTDLP_TIMEOUT`, `FFMPEG_TIMEOUT`. Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001`), optional `NEXT_YOUTUBE_API_KEY` in `frontend/.env.local` for the YouTube Data API search path.
+Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HOST`, `PORT`, `FLASK_DEBUG`, `MAX_CONTENT_LENGTH`, `YTDLP_TIMEOUT`, `FFMPEG_TIMEOUT`, `CACHE_MAX_AGE_HOURS` (default 168). Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001`), optional `NEXT_YOUTUBE_API_KEY` in `frontend/.env.local` for the YouTube Data API search path.
 
 ## Architecture
 
@@ -54,13 +55,13 @@ Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `
 
 ### Audio pipeline (`scripts/audio_worker/main.py`, `process_audio`)
 Synchronous: `/generate` blocks until the MP3 is done.
-1. Download all songs in parallel. Only YouTube URLs are accepted (`is_valid_youtube_url`). Full audio is cached as `cache/<videoId>.full.m4a` with per-video locks and atomic writes, then trimmed to 60s.
+1. Download all songs in parallel. Only YouTube URLs are accepted (`is_valid_youtube_url`). Full audio is cached by `ensure_cached` as `cache/<videoId>.full.m4a` (per-video locks, atomic writes, mtime refreshed on use), then trimmed to 60s.
 2. Process every item in parallel: re-encode songs, decode uploaded snippets, copy effects into the job temp dir.
 3. Normalize to 44.1kHz stereo 192k MP3 and concat into `output/club100_<uuid>.mp3`.
 
-Failed items are logged and **skipped silently**, so a generated track can be missing songs without the request failing. Output files are pruned after 1h and cache files after 24h.
+Failed items are logged and **skipped silently**, so a generated track can be missing songs without the request failing. Output files are pruned after 1h and cache files after `CACHE_MAX_AGE_HOURS` without use.
 
-All yt-dlp invocations must go through `YTDLP` in `main.py` (`--js-runtimes node`) and pass a timeout.
+All yt-dlp invocations must go through `YTDLP` in `main.py` (`--js-runtimes node --no-playlist`) and pass a timeout. User-supplied search text goes after `--` so it can't be parsed as a flag.
 
 ### Best start time (`best_start.py`, `POST /best-start`)
 Picks the best 60s window from YouTube's "most replayed" heatmap. It removes the linear viewer drop-off trend, ignores the first 8% of the video and starts 6s before the hotspot. Videos without a heatmap fall back to the loudest minute of the audio, reusing the generator's cache file.

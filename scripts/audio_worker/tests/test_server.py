@@ -93,3 +93,21 @@ class TestImportEffectEndpoint:
     def test_rejects_non_instant_page(self, client):
         resp = client.post('/effects/import', json={'url': 'https://www.myinstants.com/en/search/?name=clown'})
         assert resp.status_code == 400
+
+
+class TestYtSearchOptionInjection:
+    def test_query_cannot_inject_options(self, client, monkeypatch):
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen['cmd'] = cmd
+
+            class R:
+                stdout = ''
+            return R()
+
+        monkeypatch.setattr(server.subprocess, 'run', fake_run)
+        resp = client.post('/ytsearch', json={'query': '-U'})
+        assert resp.status_code == 200
+        cmd = seen['cmd']
+        assert cmd[-2:] == ['--', '-U']

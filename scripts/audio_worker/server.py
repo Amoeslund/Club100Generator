@@ -116,6 +116,7 @@ def ytsearch():
             YTDLP + [
                 '--default-search', 'ytsearch5:',
                 '--print', '%(id)s\t%(title)s\t%(uploader)s\t%(thumbnail)s',
+                '--',  # end of options: a query starting with '-' must not be parsed as a yt-dlp flag
                 query
             ],
             capture_output=True, text=True, check=True, timeout=120

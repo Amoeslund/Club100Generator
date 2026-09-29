@@ -5,6 +5,8 @@ from pathlib import Path
 # Make the audio_worker package importable when running pytest from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest  # noqa: E402
+
 import main  # noqa: E402
 
 
@@ -98,3 +100,37 @@ class TestBestStartHeatmap:
         for i in (59, 60, 61):  # the real hotspot, centred on 121s
             heatmap[i]['value'] = 1.0
         assert _heatmap_start(heatmap, duration) == 121 - LEAD_IN
+
+
+class TestDecodeDataUrl:
+    def test_mime_with_dash_and_params(self):
+        import base64
+        payload = base64.b64encode(b'\x00\x01audio').decode()
+        for mime in ('audio/mpeg', 'audio/x-m4a', 'audio/webm;codecs=opus', 'application/octet-stream'):
+            assert main.decode_data_url(f'data:{mime};base64,{payload}') == b'\x00\x01audio'
+
+    def test_bare_base64(self):
+        import base64
+        assert main.decode_data_url(base64.b64encode(b'hi').decode()) == b'hi'
+
+    def test_rejects_non_base64_data_url(self):
+        with pytest.raises(ValueError):
+            main.decode_data_url('data:audio/wav,raw-bytes')
+
+
+class TestYtdlp:
+    def test_no_playlist(self):
+        assert '--no-playlist' in main.YTDLP
+
+
+class TestAddCustomEffect:
+    def test_dedupes_and_persists(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main, 'CUSTOM_EFFECTS_FILE', tmp_path / 'custom_effects.json')
+        monkeypatch.setattr(main, 'EFFECTS', [])
+        monkeypatch.setattr(main, 'EFFECTS_MAP', {})
+        first = main.add_custom_effect({'id': 'mi_x', 'name': 'X', 'audioUrl': '/effects/mi-x.mp3'})
+        again = main.add_custom_effect({'id': 'mi_x', 'name': 'Other', 'audioUrl': '/effects/other.mp3'})
+        assert again is first
+        assert len(main.EFFECTS) == 1
+        import json
+        assert [e['id'] for e in json.loads((tmp_path / 'custom_effects.json').read_text())] == ['mi_x']

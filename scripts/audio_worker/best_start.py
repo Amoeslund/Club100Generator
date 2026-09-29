@@ -10,9 +10,7 @@ import subprocess
 
 import numpy as np
 
-import os
-
-from main import CACHE_DIR, FFMPEG_TIMEOUT, YTDLP, YTDLP_TIMEOUT, _get_cache_lock, extract_youtube_id
+from main import FFMPEG_TIMEOUT, YTDLP, YTDLP_TIMEOUT, ensure_cached
 
 CLIP = 60
 LEAD_IN = 6  # start a few seconds before the hotspot so the chorus/drop lands
@@ -31,14 +29,8 @@ def _heatmap_start(heatmap, duration):
 
 
 def _loudness_start(url):
-    video_id = extract_youtube_id(url)
     # Same cache file as the generator uses, so a later generate doesn't re-download
-    path = CACHE_DIR / f"{video_id}.full.m4a"
-    with _get_cache_lock(video_id):
-        if not path.exists():
-            partial = path.with_suffix('.m4a.partial')
-            subprocess.run(YTDLP + ["-q", "-f", "bestaudio", "-o", str(partial), url], check=True, timeout=YTDLP_TIMEOUT)
-            os.replace(partial, path)
+    path = ensure_cached(url)
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
                          capture_output=True, check=True, timeout=FFMPEG_TIMEOUT).stdout
     y = np.frombuffer(raw, np.int16).astype(np.float32)

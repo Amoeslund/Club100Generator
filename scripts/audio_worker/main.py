@@ -218,24 +218,48 @@ CUSTOM_EFFECTS_FILE = EFFECTS_DIR / 'custom_effects.json'
 if CUSTOM_EFFECTS_FILE.exists():
     EFFECTS.extend(json.loads(CUSTOM_EFFECTS_FILE.read_text(encoding='utf-8')))
 EFFECTS_MAP = {e['id']: e for e in EFFECTS}
+# Guards EFFECTS/EFFECTS_MAP and custom_effects.json against concurrent imports (Flask is threaded).
+CUSTOM_EFFECTS_LOCK = threading.RLock()
 
 def add_custom_effect(effect):
-    """Register a new effect and persist it to custom_effects.json."""
-    EFFECTS.append(effect)
-    EFFECTS_MAP[effect['id']] = effect
-    custom = []
-    if CUSTOM_EFFECTS_FILE.exists():
-        custom = json.loads(CUSTOM_EFFECTS_FILE.read_text(encoding='utf-8'))
-    custom.append(effect)
-    CUSTOM_EFFECTS_FILE.write_text(json.dumps(custom, indent=2, ensure_ascii=False), encoding='utf-8')
+    """Register a new effect and persist it to custom_effects.json.
 
-# yt-dlp needs a JavaScript runtime to solve YouTube's challenges; Node is used here
-YTDLP = ["yt-dlp", "--js-runtimes", "node"]
+    Returns the registered effect; if one with the same id already exists, that one is returned unchanged.
+    """
+    with CUSTOM_EFFECTS_LOCK:
+        existing = EFFECTS_MAP.get(effect['id'])
+        if existing:
+            return existing
+        custom = []
+        if CUSTOM_EFFECTS_FILE.exists():
+            custom = json.loads(CUSTOM_EFFECTS_FILE.read_text(encoding='utf-8'))
+        custom.append(effect)
+        tmp = CUSTOM_EFFECTS_FILE.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(custom, indent=2, ensure_ascii=False), encoding='utf-8')
+        os.replace(tmp, CUSTOM_EFFECTS_FILE)
+        EFFECTS.append(effect)
+        EFFECTS_MAP[effect['id']] = effect
+        return effect
+
+# yt-dlp needs a JavaScript runtime to solve YouTube's challenges; Node is used here.
+# --no-playlist: a watch URL carrying &list= (e.g. copied from a Mix) must resolve to just that video.
+YTDLP = ["yt-dlp", "--js-runtimes", "node", "--no-playlist"]
+
+def decode_data_url(data_url: str) -> bytes:
+    """Decode a base64 data URL (any MIME type, with or without parameters) or a bare base64 string."""
+    match = re.match(r'data:[^,]*;base64,(.*)', data_url, re.S)
+    if match:
+        return base64.b64decode(match.group(1))
+    if data_url.startswith('data:'):
+        raise ValueError('Only base64-encoded data URLs are supported')
+    return base64.b64decode(data_url)
 
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
+# Downloaded songs are kept this long after their last use (prefetch a setlist days ahead of a party).
+CACHE_MAX_AGE_HOURS = float(os.environ.get("CACHE_MAX_AGE_HOURS", str(7 * 24)))
 
 # Subprocess timeouts (seconds) so a hanging yt-dlp/ffmpeg can't tie up a worker forever.
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "300"))
@@ -304,6 +328,23 @@ def get_youtube_duration(url):
     else:
         return int(parts[0])
 
+def ensure_cached(url) -> Path:
+    """Return the cached full audio for a YouTube URL, downloading it first if needed."""
+    if not is_valid_youtube_url(url):
+        raise ValueError(f"Refusing to download non-YouTube URL: {url!r}")
+    video_id = extract_youtube_id(url)
+    cache_path = CACHE_DIR / f"{video_id}.full.m4a"
+    # Serialize downloads of the same video so concurrent entries don't corrupt the cache file.
+    with _get_cache_lock(video_id):
+        if cache_path.exists():
+            os.utime(cache_path)  # mark as recently used so cleanup keeps it
+        else:
+            # Download to a temp name, then atomically move into place.
+            partial = cache_path.with_suffix('.m4a.partial')
+            subprocess.run(YTDLP + ["-f", "bestaudio", "-o", str(partial), url], check=True, timeout=YTDLP_TIMEOUT)
+            os.replace(partial, cache_path)
+    return cache_path
+
 def download_random_youtube_audio(url, out_path, start_override=None):
     """Download a random 60s audio segment from a YouTube video, with caching."""
     if not is_valid_youtube_url(url):
@@ -316,22 +357,8 @@ def download_random_youtube_audio(url, out_path, start_override=None):
             start = max(0, min(duration - 60, int(start_override)))
         else:
             start = random.randint(0, duration - 60)
-    video_id = extract_youtube_id(url)
-    cache_path = CACHE_DIR / f"{video_id}.full.m4a" if video_id else None
     temp_audio = out_path.with_suffix('.full.m4a')
-    # Serialize downloads of the same video so concurrent entries don't corrupt the cache file.
-    lock = _get_cache_lock(video_id or url)
-    with lock:
-        if cache_path and cache_path.exists():
-            shutil.copy(cache_path, temp_audio)
-        else:
-            cmd_dl = YTDLP + ["-f", "bestaudio", "-o", str(temp_audio), url]
-            subprocess.run(cmd_dl, check=True, timeout=YTDLP_TIMEOUT)
-            if cache_path:
-                # Write to a temp file then atomically move into place.
-                cache_tmp = cache_path.with_suffix('.m4a.partial')
-                shutil.copy(temp_audio, cache_tmp)
-                os.replace(cache_tmp, cache_path)
+    shutil.copy(ensure_cached(url), temp_audio)
     cmd_trim = ["ffmpeg", "-y", "-ss", str(start), "-i", str(temp_audio), "-t", "60", "-acodec", "mp3", str(out_path)]
     subprocess.run(cmd_trim, check=True, timeout=FFMPEG_TIMEOUT)
     temp_audio.unlink(missing_ok=True)
@@ -342,7 +369,7 @@ def process_audio(data: dict) -> str:
     timeline = data.get("timeline", [])
     # Bound disk usage: drop stale generated output (1h) and cached downloads (24h).
     cleanup_old_files(OUTPUT_DIR, 60 * 60)
-    cleanup_old_files(CACHE_DIR, 24 * 60 * 60)
+    cleanup_old_files(CACHE_DIR, CACHE_MAX_AGE_HOURS * 60 * 60)
     job_id = str(uuid.uuid4())
     job_dir = Path(tempfile.gettempdir()) / f"club100_{job_id}"
     job_dir.mkdir(exist_ok=True)
@@ -397,10 +424,7 @@ def process_audio(data: dict) -> str:
                     snippet = item['snippet']
                     snippet_faded = job_dir / f"snippet_{i:03d}.mp3"
                     if snippet.get('type') == 'upload' and snippet.get('audioUrl'):
-                        audio_url = snippet['audioUrl']
-                        match = re.match(r'data:audio/\w+;base64,(.*)', audio_url)
-                        b64data = match.group(1) if match else audio_url
-                        audio_bytes = base64.b64decode(b64data)
+                        audio_bytes = decode_data_url(snippet['audioUrl'])
                         temp_upload = job_dir / f"snippet_{i:03d}_upload"
                         with open(temp_upload, 'wb') as f:
                             f.write(audio_bytes)
