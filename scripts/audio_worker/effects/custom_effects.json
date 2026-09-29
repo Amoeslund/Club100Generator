@@ -3,5 +3,10 @@
     "id": "mi_im_a_clown_80873",
     "name": "I'm a Clown",
     "audioUrl": "/effects/mi-im-a-clown-80873.mp3"
+  },
+  {
+    "id": "mi_clown",
+    "name": "Clown",
+    "audioUrl": "/effects/mi-clown.mp3"
   }
 ]
