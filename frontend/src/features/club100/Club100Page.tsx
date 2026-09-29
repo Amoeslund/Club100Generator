@@ -1,6 +1,6 @@
 import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
-import { generateTrack, youtubeSearch, getEffects } from './api';
+import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
 import { GenerateButton } from './GenerateButton';
 import { SongSearch } from './SongSearch';
 import {
@@ -150,6 +150,51 @@ export const Club100Page: React.FC = () => {
   const [addEffectIdx, setAddEffectIdx] = useState<number | null>(null);
   const [selectedEffectId, setSelectedEffectId] = useState<string>('');
 
+  // Import effect from myinstants.com
+  const [instantUrl, setInstantUrl] = useState('');
+  const [instantStatus, setInstantStatus] = useState<string | null>(null);
+  const [instantLoading, setInstantLoading] = useState(false);
+  const handleImportInstant = async () => {
+    setInstantLoading(true);
+    setInstantStatus(null);
+    try {
+      const effect = await importMyInstantsEffect(instantUrl.trim());
+      setEffects(prev => (prev.some(e => e.id === effect.id) ? prev : [...prev, effect]));
+      setInstantStatus(`Imported "${effect.name}"`);
+      setInstantUrl('');
+    } catch (err) {
+      setInstantStatus(err instanceof Error ? err.message : 'Import failed');
+    }
+    setInstantLoading(false);
+  };
+
+  // Auto-find the best 60s of every song that has no start time yet
+  const [autoStartProgress, setAutoStartProgress] = useState<{ current: number; total: number; failed: number } | null>(null);
+  const handleAutoStart = async () => {
+    const pending = trackItems.flatMap(item =>
+      item.type === 'song' && item.song.start === undefined ? [{ id: item.id, url: item.song.url }] : [],
+    );
+    const progress = { current: 0, total: pending.length, failed: 0 };
+    setAutoStartProgress({ ...progress });
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length) {
+        const { id, url } = pending[next++];
+        try {
+          const { start } = await findBestStart(url);
+          setTrackItems(prev => prev.map(it =>
+            it.id === id && it.type === 'song' ? { ...it, song: { ...it.song, start } } : it,
+          ));
+        } catch {
+          progress.failed++;
+        }
+        progress.current++;
+        setAutoStartProgress({ ...progress });
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  };
+
   // Auto effect after each song
   const [autoEffectId, setAutoEffectId] = useState<string>('');
 
@@ -170,6 +215,23 @@ export const Club100Page: React.FC = () => {
             <option key={effect.id} value={effect.id}>{effect.name}</option>
           ))}
         </select>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <input
+            value={instantUrl}
+            onChange={e => setInstantUrl(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && instantUrl.trim()) handleImportInstant(); }}
+            placeholder="Paste myinstants.com link to import effect"
+            style={{ flex: 1, fontSize: 15, border: '2px solid #000', borderRadius: 4, padding: 4 }}
+          />
+          <button
+            onClick={handleImportInstant}
+            disabled={!instantUrl.trim() || instantLoading}
+            style={{ fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#a5d8ff', boxShadow: '2px 2px 0 #000', padding: '2px 10px' }}
+          >
+            {instantLoading ? 'Importing...' : 'Import'}
+          </button>
+        </div>
+        {instantStatus && <div style={{ marginTop: 6, fontSize: 14 }}>{instantStatus}</div>}
       </div>
       {/* Mass import UI */}
       <div style={{ border: '3px solid black', padding: 12, marginBottom: 16, background: '#e6f7ff', borderRadius: 8 }}>
@@ -208,6 +270,22 @@ export const Club100Page: React.FC = () => {
                 <b>Not found:</b> {importResult.notFound.join(', ')}
               </div>
             )}
+          </div>
+        )}
+      </div>
+      {/* Auto start times */}
+      <div style={{ border: '3px solid black', padding: 12, marginBottom: 16, background: '#f0fff0', borderRadius: 8 }}>
+        <button
+          onClick={handleAutoStart}
+          disabled={!!autoStartProgress && autoStartProgress.current < autoStartProgress.total}
+          style={{ fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#b2f2bb', boxShadow: '2px 2px 0 #000', padding: '2px 10px' }}
+        >
+          Auto-find best minute for songs without start time
+        </button>
+        {autoStartProgress && (
+          <div style={{ marginTop: 6, fontSize: 14 }}>
+            {autoStartProgress.current}/{autoStartProgress.total} done
+            {autoStartProgress.failed > 0 && ` (${autoStartProgress.failed} failed)`}
           </div>
         )}
       </div>

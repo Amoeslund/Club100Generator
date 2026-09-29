@@ -12,6 +12,7 @@ import {
   injectAutoEffect,
   songNumberAt,
   parseImportLine,
+  parseStartParam,
   getYoutubeId,
   makeId,
 } from './timeline';
@@ -145,5 +146,25 @@ describe('getYoutubeId', () => {
   });
   it('returns null for non-YouTube URLs', () => {
     expect(getYoutubeId('https://example.com/video')).toBeNull();
+  });
+});
+
+describe('parseStartParam', () => {
+  it('reads plain seconds', () => {
+    expect(parseStartParam('https://www.youtube.com/watch?v=abcdefghijk&t=83')).toBe(83);
+    expect(parseStartParam('https://youtu.be/abcdefghijk?t=83s')).toBe(83);
+  });
+  it('reads minute/hour notation', () => {
+    expect(parseStartParam('https://youtu.be/abcdefghijk?t=1m23s')).toBe(83);
+    expect(parseStartParam('https://youtu.be/abcdefghijk?t=1h0m5s')).toBe(3605);
+  });
+  it('returns undefined when absent or malformed', () => {
+    expect(parseStartParam('https://youtu.be/abcdefghijk')).toBeUndefined();
+    expect(parseStartParam('https://youtu.be/abcdefghijk?t=abc')).toBeUndefined();
+    expect(parseStartParam('not a url')).toBeUndefined();
+  });
+  it('is applied by parseImportLine', () => {
+    const parsed = parseImportLine('https://www.youtube.com/watch?v=abcdefghijk&t=42	My Song');
+    expect(parsed).toEqual({ kind: 'url', song: { url: 'https://www.youtube.com/watch?v=abcdefghijk&t=42', title: 'My Song', start: 42 } });
   });
 });

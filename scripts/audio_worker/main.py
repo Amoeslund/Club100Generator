@@ -213,7 +213,24 @@ EFFECTS = [
     },
     # Add more effects here as needed
 ]
+# Effects imported at runtime (e.g. from myinstants) are persisted here
+CUSTOM_EFFECTS_FILE = EFFECTS_DIR / 'custom_effects.json'
+if CUSTOM_EFFECTS_FILE.exists():
+    EFFECTS.extend(json.loads(CUSTOM_EFFECTS_FILE.read_text(encoding='utf-8')))
 EFFECTS_MAP = {e['id']: e for e in EFFECTS}
+
+def add_custom_effect(effect):
+    """Register a new effect and persist it to custom_effects.json."""
+    EFFECTS.append(effect)
+    EFFECTS_MAP[effect['id']] = effect
+    custom = []
+    if CUSTOM_EFFECTS_FILE.exists():
+        custom = json.loads(CUSTOM_EFFECTS_FILE.read_text(encoding='utf-8'))
+    custom.append(effect)
+    CUSTOM_EFFECTS_FILE.write_text(json.dumps(custom, indent=2, ensure_ascii=False), encoding='utf-8')
+
+# yt-dlp needs a JavaScript runtime to solve YouTube's challenges; Node is used here
+YTDLP = ["yt-dlp", "--js-runtimes", "node"]
 
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
@@ -274,7 +291,7 @@ def is_valid_youtube_url(url) -> bool:
 
 def get_youtube_duration(url):
     """Get the duration of a YouTube video in seconds using yt-dlp."""
-    cmd = ["yt-dlp", "--get-duration", url]
+    cmd = YTDLP + ["--get-duration", url]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=YTDLP_TIMEOUT)
     duration_str = result.stdout.strip()
     parts = duration_str.split(":")
@@ -308,7 +325,7 @@ def download_random_youtube_audio(url, out_path, start_override=None):
         if cache_path and cache_path.exists():
             shutil.copy(cache_path, temp_audio)
         else:
-            cmd_dl = ["yt-dlp", "-f", "bestaudio", "-o", str(temp_audio), url]
+            cmd_dl = YTDLP + ["-f", "bestaudio", "-o", str(temp_audio), url]
             subprocess.run(cmd_dl, check=True, timeout=YTDLP_TIMEOUT)
             if cache_path:
                 # Write to a temp file then atomically move into place.

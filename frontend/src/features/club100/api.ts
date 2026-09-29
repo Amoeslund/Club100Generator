@@ -58,6 +58,28 @@ export async function getEffects(): Promise<Effect[]> {
   return res.json();
 }
 
+export async function importMyInstantsEffect(url: string): Promise<Effect> {
+  const res = await fetch(`${BACKEND_URL}/effects/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to import effect');
+  return data;
+}
+
+export async function findBestStart(url: string): Promise<{ start: number; method: string }> {
+  const res = await fetch(`${BACKEND_URL}/best-start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to find best start');
+  return data;
+}
+
 /** Direct, cacheable URL to an effect's audio file served by the backend. */
 export function getEffectAudioUrl(effect: Effect): string {
   return `${BACKEND_URL}${effect.audioUrl}`;

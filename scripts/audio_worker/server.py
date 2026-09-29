@@ -5,7 +5,9 @@ import re
 import subprocess
 import traceback
 import pathlib
-from main import process_audio, EFFECTS
+from main import process_audio, EFFECTS, YTDLP, is_valid_youtube_url
+from myinstants import import_myinstants
+from best_start import find_best_start
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -37,6 +39,21 @@ def build_timeline_from_legacy(data):
 def list_effects():
     """List all available effects."""
     return jsonify(EFFECTS)
+
+@app.route('/effects/import', methods=['POST'])
+def import_effect():
+    """Import a sound effect from a myinstants.com instant page URL."""
+    url = (request.get_json(silent=True) or {}).get('url', '')
+    if not isinstance(url, str):
+        return jsonify({'error': 'Missing url'}), 400
+    try:
+        effect, created = import_myinstants(url)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception:
+        print(traceback.format_exc())
+        return jsonify({'error': 'Import from myinstants failed'}), 502
+    return jsonify(effect), 201 if created else 200
 
 @app.route('/effects/<path:filename>', methods=['GET'])
 def serve_effect(filename):
@@ -74,6 +91,19 @@ def download(job_id):
         return jsonify({"error": "File not found"}), 404
     return send_file(file_path, as_attachment=True)
 
+@app.route('/best-start', methods=['POST'])
+def best_start():
+    """Find the best 60s start time for a YouTube song."""
+    url = (request.get_json(silent=True) or {}).get('url')
+    if not is_valid_youtube_url(url):
+        return jsonify({'error': 'Missing or invalid YouTube url'}), 400
+    try:
+        start, method = find_best_start(url)
+    except Exception:
+        print(traceback.format_exc())
+        return jsonify({'error': 'Could not find a start time'}), 500
+    return jsonify({'start': start, 'method': method})
+
 @app.route('/ytsearch', methods=['POST'])
 def ytsearch():
     """Search YouTube for songs using yt-dlp."""
@@ -83,8 +113,7 @@ def ytsearch():
         return jsonify({'error': 'Missing query'}), 400
     try:
         result = subprocess.run(
-            [
-                'yt-dlp',
+            YTDLP + [
                 '--default-search', 'ytsearch5:',
                 '--print', '%(id)s\t%(title)s\t%(uploader)s\t%(thumbnail)s',
                 query

@@ -103,9 +103,23 @@ export function parseImportLine(line: string): ParsedImportLine | null {
   if (first.startsWith('http')) {
     const url = first.trim();
     const title = rest.join(' ').trim();
-    return { kind: 'url', song: { url, title: title || url } };
+    const start = parseStartParam(url);
+    return { kind: 'url', song: { url, title: title || url, ...(start !== undefined && { start }) } };
   }
   return { kind: 'query', query: trimmed };
+}
+
+/** Read a YouTube start time (?t=83, t=83s, t=1m23s) from a URL, in seconds. */
+export function parseStartParam(url: string): number | undefined {
+  let t: string | null;
+  try {
+    t = new URL(url).searchParams.get('t');
+  } catch {
+    return undefined;
+  }
+  const m = t?.match(/^(?:(\d+)h)?(?:(\d+)m)?(\d+)?s?$/);
+  if (!t || !m) return undefined;
+  return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
 }
 
 /** Extract the 11-character YouTube video id from any common URL form. */

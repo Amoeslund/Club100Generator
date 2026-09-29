@@ -71,3 +71,25 @@ class TestYtSearchEndpoint:
     def test_missing_query(self, client):
         resp = client.post('/ytsearch', json={})
         assert resp.status_code == 400
+
+
+class TestBestStartEndpoint:
+    def test_rejects_non_youtube_url(self, client):
+        resp = client.post('/best-start', json={'url': 'https://example.com/watch?v=abcdefghijk'})
+        assert resp.status_code == 400
+
+    def test_returns_start(self, client, monkeypatch):
+        monkeypatch.setattr(server, 'find_best_start', lambda url: (42, 'heatmap'))
+        resp = client.post('/best-start', json={'url': 'https://www.youtube.com/watch?v=abcdefghijk'})
+        assert resp.status_code == 200
+        assert resp.get_json() == {'start': 42, 'method': 'heatmap'}
+
+
+class TestImportEffectEndpoint:
+    def test_rejects_non_myinstants_url(self, client):
+        resp = client.post('/effects/import', json={'url': 'https://evil.com/instant/x/'})
+        assert resp.status_code == 400
+
+    def test_rejects_non_instant_page(self, client):
+        resp = client.post('/effects/import', json={'url': 'https://www.myinstants.com/en/search/?name=clown'})
+        assert resp.status_code == 400

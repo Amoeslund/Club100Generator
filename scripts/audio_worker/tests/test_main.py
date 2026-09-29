@@ -87,3 +87,14 @@ class TestEffectsMap:
     def test_ids_are_unique(self):
         ids = [e['id'] for e in main.EFFECTS]
         assert len(ids) == len(set(ids))
+
+
+class TestBestStartHeatmap:
+    def test_picks_hotspot_with_lead_in(self):
+        from best_start import LEAD_IN, _heatmap_start
+        duration = 200
+        heatmap = [{'start_time': t, 'end_time': t + 2, 'value': 0.5} for t in range(0, duration, 2)]
+        heatmap[0]['value'] = 1.0  # everyone "replays" the start
+        for i in (59, 60, 61):  # the real hotspot, centred on 121s
+            heatmap[i]['value'] = 1.0
+        assert _heatmap_start(heatmap, duration) == 121 - LEAD_IN
