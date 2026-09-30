@@ -9,7 +9,9 @@ const EDGE_GRAB_PX = 8;
 // Canvas can't read CSS variables cheaply; these mirror the tokens in club100.css.
 const COLORS = { bar: '#b9bdcc', barIn: '#1d1b3a', window: '#fff4c2', edge: '#1d1b3a', playhead: '#e4002b' };
 
-type DragMode = 'start' | 'end' | 'move' | 'seek';
+// 'press' is a pointer down inside the clip: a click there seeks, only real movement drags the clip.
+type DragMode = 'start' | 'end' | 'move' | 'seek' | 'press';
+const DRAG_THRESHOLD_PX = 4;
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -35,7 +37,7 @@ export const SongEditor: React.FC<{
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ mode: DragMode; offset: number } | null>(null);
+  const drag = useRef<{ mode: DragMode; offset: number; downX: number } | null>(null);
   const stopAt = useRef<number | null>(null);
 
   const duration = peaks?.duration ?? 0;
@@ -136,8 +138,8 @@ export const SongEditor: React.FC<{
     let mode: DragMode = 'seek';
     if (Math.abs(clickPx - px(start)) <= EDGE_GRAB_PX) mode = 'start';
     else if (Math.abs(clickPx - px(start + length)) <= EDGE_GRAB_PX) mode = 'end';
-    else if (t > start && t < start + length) mode = 'move';
-    drag.current = { mode, offset: t - start };
+    else if (t > start && t < start + length) mode = 'press';
+    drag.current = { mode, offset: t - start, downX: e.clientX };
     if (mode === 'seek') {
       stopAt.current = null;
       seek(t);
@@ -155,6 +157,7 @@ export const SongEditor: React.FC<{
       wrap.style.cursor = onEdge ? 'col-resize' : t > start && t < start + length ? 'grab' : 'pointer';
       return;
     }
+    if (drag.current.mode === 'press' && Math.abs(e.clientX - drag.current.downX) > DRAG_THRESHOLD_PX) drag.current.mode = 'move';
     const { mode, offset } = drag.current;
     if (mode === 'seek') seek(t);
     if (mode === 'start') {
@@ -169,10 +172,13 @@ export const SongEditor: React.FC<{
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     const mode = drag.current?.mode;
     drag.current = null;
-    if (mode && mode !== 'seek') commit(start, end);
+    if (mode === 'press') {
+      stopAt.current = null;
+      seek(timeAt(e.clientX));
+    } else if (mode && mode !== 'seek') commit(start, end);
   };
 
   const togglePlay = () => {
@@ -257,7 +263,7 @@ export const SongEditor: React.FC<{
       {duration > 0 && (
         <div className="c100-wave-scale c100-muted">
           <span>0:00</span>
-          <span>{formatTime(playhead)} (click to listen, drag the highlighted clip or its edges)</span>
+          <span>{formatTime(playhead, true)}: click anywhere to listen from there, drag the clip or its edges to change it</span>
           <span>{formatTime(duration)}</span>
         </div>
       )}

@@ -421,13 +421,30 @@ def song_clip(url, start_override=None, end=None) -> tuple[Path, float]:
     clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start:g}{suffix}_{SONG_LUFS:g}.mp3"
     return encode_clip(["-ss", f"{start:g}", "-t", f"{length:g}", "-i", str(full)], clip, SONG_LUFS), start
 
+def audio_mimetype(path: Path) -> str:
+    """Real container type of a cached download. yt-dlp's bestaudio is usually WebM/Opus even
+    though the cache file is named .m4a, and browsers need the right type to play and seek."""
+    with open(path, "rb") as f:
+        head = f.read(12)
+    if head.startswith(bytes.fromhex("1a45dfa3")):  # EBML header (WebM/Matroska)
+        return "audio/webm"
+    if head[4:8] == b"ftyp":
+        return "audio/mp4"
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+    return "application/octet-stream"
+
 def song_peaks(video_id: str, buckets_per_second: int = 4) -> dict:
     """Waveform overview of a cached song: {duration, peaks[0..1]} at `buckets_per_second`."""
     cache_path = ensure_cached(f"https://www.youtube.com/watch?v={video_id}")
     peaks_path = CACHE_DIR / f"{video_id}.peaks.json"
-    if peaks_path.exists() and peaks_path.stat().st_mtime >= cache_path.stat().st_mtime:
-        os.utime(peaks_path)
-        return json.loads(peaks_path.read_text(encoding="utf-8"))
+    # Keyed by source size: the cache file's mtime is refreshed on every use, so it can't be compared.
+    source_size = cache_path.stat().st_size
+    if peaks_path.exists():
+        cached = json.loads(peaks_path.read_text(encoding="utf-8"))
+        if cached.get("sourceSize") == source_size and cached.get("bucketsPerSecond") == buckets_per_second:
+            os.utime(peaks_path)
+            return {k: v for k, v in cached.items() if k != "sourceSize"}
     rate = 2000
     pcm = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(cache_path), "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
@@ -440,7 +457,7 @@ def song_peaks(video_id: str, buckets_per_second: int = 4) -> dict:
     result = {"duration": len(samples) / rate, "bucketsPerSecond": buckets_per_second,
               "peaks": [round(v / top, 3) for v in raw]}
     tmp = peaks_path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(result), encoding="utf-8")
+    tmp.write_text(json.dumps({**result, "sourceSize": source_size}), encoding="utf-8")
     os.replace(tmp, peaks_path)
     return result
 

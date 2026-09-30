@@ -227,3 +227,50 @@ class TestSongClipWindow:
         assert len(result['peaks']) in (12, 13)
         assert max(result['peaks']) == 1
         assert main.song_peaks('aaaaaaaaaaa') == result  # cached
+
+
+class TestSongAudioServing:
+    def test_detects_webm_behind_m4a_name(self, tmp_path):
+        import subprocess
+        webm = tmp_path / 'x.full.m4a'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=duration=1',
+                        '-c:a', 'libopus', '-f', 'webm', str(webm)], check=True)
+        assert main.audio_mimetype(webm) == 'audio/webm'
+        mp4 = tmp_path / 'y.m4a'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=duration=1',
+                        '-c:a', 'aac', str(mp4)], check=True)
+        assert main.audio_mimetype(mp4) == 'audio/mp4'
+
+    def test_peaks_survive_cache_mtime_refresh(self, tmp_path, monkeypatch):
+        import os
+        import subprocess
+        full = tmp_path / 'full.m4a'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=duration=2',
+                        '-c:a', 'aac', str(full)], check=True)
+
+        def touching_cache(url):
+            os.utime(full)  # like ensure_cached does on every use
+            return full
+
+        monkeypatch.setattr(main, 'ensure_cached', touching_cache)
+        monkeypatch.setattr(main, 'CACHE_DIR', tmp_path)
+        first = main.song_peaks('bbbbbbbbbbb')
+        monkeypatch.setattr(main.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(AssertionError('recomputed')))
+        assert main.song_peaks('bbbbbbbbbbb') == first
+
+
+class TestSongAudioEndpoint:
+    def test_stable_validators_and_webm_type(self, tmp_path, monkeypatch):
+        import subprocess
+        import server
+        webm = tmp_path / 'full.m4a'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=duration=2',
+                        '-c:a', 'libopus', '-f', 'webm', str(webm)], check=True)
+        import os
+        monkeypatch.setattr(server, 'ensure_cached', lambda url: (os.utime(webm), webm)[1])
+        client = server.app.test_client()
+        a = client.get('/songs/ccccccccccc/audio', headers={'Range': 'bytes=0-9'})
+        b = client.get('/songs/ccccccccccc/audio', headers={'Range': 'bytes=10-19', 'If-Range': a.headers['ETag']})
+        assert a.status_code == 206 and a.mimetype == 'audio/webm'
+        assert b.status_code == 206  # If-Range still matches after the mtime refresh
+        assert a.headers['Last-Modified'] == b.headers['Last-Modified']
