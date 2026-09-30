@@ -188,3 +188,42 @@ class TestClipPipeline:
         assert 4.8 < main.probe_duration(Path(out)) < 5.3
         assert seen[-1][3] == ['Missing']
         Path(out).unlink()
+
+
+class TestSongClipWindow:
+    def _fake_cache(self, tmp_path, monkeypatch, seconds=120):
+        import subprocess
+        full = tmp_path / 'full.m4a'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'sine=duration={seconds}',
+                        '-c:a', 'aac', str(full)], check=True)
+        monkeypatch.setattr(main, 'ensure_cached', lambda url: full)
+        monkeypatch.setattr(main, 'CLIP_CACHE_DIR', tmp_path)
+        return full
+
+    def test_full_minute_keeps_original_cache_name(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch)
+        clip, start = main.song_clip('https://youtu.be/aaaaaaaaaaa', 41)
+        assert start == 41
+        assert clip.name == f'song_aaaaaaaaaaa_41_{main.SONG_LUFS:g}.mp3'
+        assert 59.5 < main.probe_duration(clip) < 60.5
+
+    def test_end_shortens_clip(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch)
+        clip, start = main.song_clip('https://youtu.be/aaaaaaaaaaa', 10.5, 40)
+        assert start == 10.5
+        assert '_29.5s_' in clip.name
+        assert 29 < main.probe_duration(clip) < 30.2
+
+    def test_end_before_start_is_ignored(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch)
+        clip, _ = main.song_clip('https://youtu.be/aaaaaaaaaaa', 30, 5)
+        assert 59.5 < main.probe_duration(clip) < 60.5
+
+    def test_peaks(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch, seconds=3)
+        monkeypatch.setattr(main, 'CACHE_DIR', tmp_path)
+        result = main.song_peaks('aaaaaaaaaaa')
+        assert 2.9 < result['duration'] < 3.2
+        assert len(result['peaks']) in (12, 13)
+        assert max(result['peaks']) == 1
+        assert main.song_peaks('aaaaaaaaaaa') == result  # cached

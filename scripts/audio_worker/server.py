@@ -10,7 +10,7 @@ import threading
 import traceback
 import uuid
 import pathlib
-from main import process_audio, build_clip, probe_duration, CLIP_CACHE_DIR, EFFECTS, YTDLP, is_valid_youtube_url
+from main import process_audio, build_clip, probe_duration, ensure_cached, song_peaks, CLIP_CACHE_DIR, EFFECTS, YTDLP, is_valid_youtube_url
 from myinstants import import_myinstants
 from best_start import find_best_start
 from flask_cors import CORS
@@ -146,6 +146,31 @@ def serve_clip(clip_id):
     if not re.fullmatch(r'[\w.-]+\.mp3', clip_id):
         return jsonify({'error': 'Invalid clip id'}), 400
     return send_from_directory(CLIP_CACHE_DIR, clip_id, mimetype='audio/mpeg', max_age=3600)
+
+
+@app.route('/songs/<video_id>/audio', methods=['GET'])
+def song_audio(video_id):
+    """Full cached audio of a song, for picking start/end in the song editor (Range supported)."""
+    if not re.fullmatch(r'[\w-]{11}', video_id):
+        return jsonify({'error': 'Invalid video id'}), 400
+    try:
+        path = ensure_cached(f'https://www.youtube.com/watch?v={video_id}')
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': _clip_error(e)}), 422
+    return send_file(path, mimetype='audio/mp4', conditional=True, max_age=3600)
+
+
+@app.route('/songs/<video_id>/peaks', methods=['GET'])
+def song_waveform(video_id):
+    """Waveform overview of a song: {duration, bucketsPerSecond, peaks}."""
+    if not re.fullmatch(r'[\w-]{11}', video_id):
+        return jsonify({'error': 'Invalid video id'}), 400
+    try:
+        return jsonify(song_peaks(video_id))
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': _clip_error(e)}), 422
 
 
 @app.route('/download/<job_id>', methods=['GET'])

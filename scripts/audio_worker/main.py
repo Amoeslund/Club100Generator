@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 import random
+import array
 import base64
 import pathlib
 import concurrent.futures
@@ -393,23 +394,55 @@ def encode_clip(inputs: list[str], out: Path, target_lufs: float | None) -> Path
         os.replace(partial, out)
     return out
 
-def song_clip(url, start_override=None) -> tuple[Path, int]:
-    """Normalized 60s clip of a YouTube video, from `start_override` or a random start.
+CLIP_SECONDS = 60
 
-    Returns (clip path, start second actually used).
+def song_clip(url, start_override=None, end=None) -> tuple[Path, float]:
+    """Normalized clip of a YouTube video: 60s from `start_override` (or a random start).
+
+    An optional `end` (seconds into the video) shortens the clip; it never makes it longer than
+    CLIP_SECONDS. Starts keep 0.1s precision. Returns (clip path, start second actually used).
     """
     if not is_valid_youtube_url(url):
         raise ValueError(f"Refusing to download non-YouTube URL: {url!r}")
     full = ensure_cached(url)
     duration = probe_duration(full)
-    if duration <= 60:
+    wanted_start = None if start_override is None else round(float(start_override), 1)
+    length = CLIP_SECONDS
+    if end is not None and wanted_start is not None and float(end) > wanted_start:
+        length = min(CLIP_SECONDS, round(float(end) - wanted_start, 1))
+    if duration <= length:
         start = 0
-    elif start_override is not None:
-        start = max(0, min(int(duration) - 60, int(start_override)))
+    elif wanted_start is not None:
+        start = max(0, min(int(duration) - length, wanted_start))
     else:
-        start = random.randint(0, int(duration) - 60)
-    clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start}_{SONG_LUFS:g}.mp3"
-    return encode_clip(["-ss", str(start), "-t", "60", "-i", str(full)], clip, SONG_LUFS), start
+        start = random.randint(0, int(duration) - CLIP_SECONDS)
+    # Full-length clips keep their original cache name, so existing clips are reused.
+    suffix = "" if length == CLIP_SECONDS else f"_{length:g}s"
+    clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start:g}{suffix}_{SONG_LUFS:g}.mp3"
+    return encode_clip(["-ss", f"{start:g}", "-t", f"{length:g}", "-i", str(full)], clip, SONG_LUFS), start
+
+def song_peaks(video_id: str, buckets_per_second: int = 4) -> dict:
+    """Waveform overview of a cached song: {duration, peaks[0..1]} at `buckets_per_second`."""
+    cache_path = ensure_cached(f"https://www.youtube.com/watch?v={video_id}")
+    peaks_path = CACHE_DIR / f"{video_id}.peaks.json"
+    if peaks_path.exists() and peaks_path.stat().st_mtime >= cache_path.stat().st_mtime:
+        os.utime(peaks_path)
+        return json.loads(peaks_path.read_text(encoding="utf-8"))
+    rate = 2000
+    pcm = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(cache_path), "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"],
+        capture_output=True, check=True, timeout=FFMPEG_TIMEOUT,
+    ).stdout
+    samples = array.array("h", pcm[: len(pcm) - len(pcm) % 2])
+    step = rate // buckets_per_second
+    raw = [max(map(abs, samples[i:i + step]), default=0) for i in range(0, len(samples), step)]
+    top = max(raw, default=0) or 1
+    result = {"duration": len(samples) / rate, "bucketsPerSecond": buckets_per_second,
+              "peaks": [round(v / top, 3) for v in raw]}
+    tmp = peaks_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(result), encoding="utf-8")
+    os.replace(tmp, peaks_path)
+    return result
 
 def snippet_clip(audio_bytes: bytes, scratch_dir: Path) -> Path:
     """Normalized clip of an uploaded/recorded snippet, cached by content hash."""
@@ -432,7 +465,7 @@ def build_clip(item: dict, scratch_dir: Path) -> tuple[Path, dict]:
     the song start actually used so a random start can be pinned by the caller."""
     kind = item.get('type')
     if kind == 'song' and isinstance(item.get('song'), dict):
-        clip, start = song_clip(item['song'].get('url'), item['song'].get('start'))
+        clip, start = song_clip(item['song'].get('url'), item['song'].get('start'), item['song'].get('end'))
         return clip, {'start': start}
     if kind == 'snippet' and isinstance(item.get('snippet'), dict):
         snippet = item['snippet']
