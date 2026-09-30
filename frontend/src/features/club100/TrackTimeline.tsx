@@ -44,7 +44,8 @@ export const TrackTimeline: React.FC<{
   onPlayItem: (id: string) => void;
   onRetryClip: (item: TrackItem) => void;
   headerExtra?: React.ReactNode;
-}> = ({ items, onChange, effects, clips, activeItemId, onPlayItem, onRetryClip, headerExtra }) => {
+  onImportEffect?: (url: string) => Promise<Effect>;
+}> = ({ items, onChange, effects, clips, activeItemId, onPlayItem, onRetryClip, headerExtra, onImportEffect }) => {
   const [editorId, setEditorId] = useState<string | null>(null);
   const [insertAfter, setInsertAfter] = useState<string | null>(null);
   const sensors = useSensors(
@@ -118,6 +119,7 @@ export const TrackTimeline: React.FC<{
                 editorOpen={editorId === item.id}
                 insertOpen={insertAfter === item.id}
                 effects={effects}
+                onImportEffect={onImportEffect}
                 onUpdate={next => update(item.id, next)}
                 onRemove={() => remove(item)}
                 onPlay={() => onPlayItem(item.id)}
@@ -130,7 +132,7 @@ export const TrackTimeline: React.FC<{
           </SortableContext>
         </DndContext>
         {insertAfter === END ? (
-          <InsertPanel effects={effects} onInsert={newItem => insert(END, newItem)} onClose={() => setInsertAfter(null)} end />
+          <InsertPanel effects={effects} onImportEffect={onImportEffect} onInsert={newItem => insert(END, newItem)} onClose={() => setInsertAfter(null)} end />
         ) : (
           <div className="c100-insert c100-insert-end">
             <button type="button" className="c100-btn" onClick={() => setInsertAfter(END)}>+ Add at the end</button>
@@ -150,6 +152,7 @@ const TimelineRow: React.FC<{
   editorOpen: boolean;
   insertOpen: boolean;
   effects: Effect[];
+  onImportEffect?: (url: string) => Promise<Effect>;
   onUpdate: (item: TrackItem) => void;
   onRemove: () => void;
   onPlay: () => void;
@@ -157,7 +160,7 @@ const TimelineRow: React.FC<{
   onToggleEditor: () => void;
   onToggleInsert: () => void;
   onInsert: (item: TrackItem) => void;
-}> = ({ item, songNumber, clip, active, editorOpen, insertOpen, effects, onUpdate, onRemove, onPlay, onRetry, onToggleEditor, onToggleInsert, onInsert }) => {
+}> = ({ item, songNumber, clip, active, editorOpen, insertOpen, effects, onImportEffect, onUpdate, onRemove, onPlay, onRetry, onToggleEditor, onToggleInsert, onInsert }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id });
 
   const handle = (
@@ -254,7 +257,7 @@ const TimelineRow: React.FC<{
           onClose={onToggleEditor}
         />
       )}
-      {insertOpen && <InsertPanel effects={effects} onInsert={onInsert} onClose={onToggleInsert} />}
+      {insertOpen && <InsertPanel effects={effects} onImportEffect={onImportEffect} onInsert={onInsert} onClose={onToggleInsert} />}
     </div>
   );
 };
@@ -273,7 +276,13 @@ const ClipControl: React.FC<{ clip: ClipState | undefined; onPlay: () => void; o
 type InsertKind = 'song' | 'snippet' | 'effect' | 'section';
 
 /** Add a song, recording, sound effect or section at a specific spot in the running order. */
-const InsertPanel: React.FC<{ effects: Effect[]; onInsert: (item: TrackItem) => void; onClose: () => void; end?: boolean }> = ({ effects, onInsert, onClose, end }) => {
+const InsertPanel: React.FC<{
+  effects: Effect[];
+  onImportEffect?: (url: string) => Promise<Effect>;
+  onInsert: (item: TrackItem) => void;
+  onClose: () => void;
+  end?: boolean;
+}> = ({ effects, onImportEffect, onInsert, onClose, end }) => {
   const [kind, setKind] = useState<InsertKind>('song');
   const tabs: [InsertKind, string][] = [['song', 'Song'], ['snippet', 'Recording'], ['effect', 'Sound effect'], ['section', 'Section']];
   return (
@@ -286,7 +295,7 @@ const InsertPanel: React.FC<{ effects: Effect[]; onInsert: (item: TrackItem) => 
       </div>
       {kind === 'song' && <SongInsert onInsert={onInsert} />}
       {kind === 'snippet' && <RecordingInsert onInsert={onInsert} />}
-      {kind === 'effect' && <EffectInsert effects={effects} onInsert={onInsert} />}
+      {kind === 'effect' && <EffectInsert effects={effects} onImport={onImportEffect} onInsert={onInsert} />}
       {kind === 'section' && <SectionInsert onInsert={onInsert} />}
     </div>
   );
@@ -404,8 +413,12 @@ const RecordingInsert: React.FC<{ onInsert: (item: TrackItem) => void }> = ({ on
   );
 };
 
-const EffectInsert: React.FC<{ effects: Effect[]; onInsert: (item: TrackItem) => void }> = ({ effects, onInsert }) => (
-  <EffectPicker effects={effects} onAdd={effect => onInsert(effectItem(effect))} addLabel="Add here" autoFocus />
+const EffectInsert: React.FC<{
+  effects: Effect[];
+  onImport?: (url: string) => Promise<Effect>;
+  onInsert: (item: TrackItem) => void;
+}> = ({ effects, onImport, onInsert }) => (
+  <EffectPicker effects={effects} onImport={onImport} onAdd={effect => onInsert(effectItem(effect))} addLabel="Add here" autoFocus />
 );
 
 const SectionInsert: React.FC<{ onInsert: (item: TrackItem) => void }> = ({ onInsert }) => {

@@ -174,23 +174,12 @@ export const Club100Page: React.FC = () => {
     setImportProgress(null);
   };
 
-  // Import effect from myinstants.com
-  const [instantUrl, setInstantUrl] = useState('');
-  const [instantStatus, setInstantStatus] = useState<string | null>(null);
-  const [instantLoading, setInstantLoading] = useState(false);
-  const handleImportInstant = async () => {
-    setInstantLoading(true);
-    setInstantStatus(null);
-    try {
-      const effect = await importMyInstantsEffect(instantUrl.trim());
-      setEffects(prev => (prev.some(e => e.id === effect.id) ? prev : [...prev, effect]));
-      setInstantStatus(`Added "${effect.name}" to your sound effects`);
-      setInstantUrl('');
-    } catch (err) {
-      setInstantStatus(err instanceof Error ? err.message : 'Import failed');
-    }
-    setInstantLoading(false);
-  };
+  // Import a sound from a myinstants.com page into the effect library.
+  const importInstant = useCallback(async (url: string) => {
+    const effect = await importMyInstantsEffect(url);
+    setEffects(prev => (prev.some(e => e.id === effect.id) ? prev : [...prev, effect]));
+    return effect;
+  }, []);
 
   // Find the best 60s of every song that has no start time yet
   const [autoStartProgress, setAutoStartProgress] = useState<{ current: number; total: number; failed: number } | null>(null);
@@ -283,22 +272,9 @@ export const Club100Page: React.FC = () => {
 
                 {addTab === 'effects' && (
                   <div className="c100-stack">
-                    <div className="c100-inline">
-                      <input
-                        className="c100-input"
-                        value={instantUrl}
-                        onChange={e => setInstantUrl(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && instantUrl.trim()) handleImportInstant(); }}
-                        placeholder="Link to a sound on myinstants.com"
-                        aria-label="myinstants.com link"
-                      />
-                      <button type="button" className="c100-btn c100-btn-primary" onClick={handleImportInstant} disabled={!instantUrl.trim() || instantLoading}>
-                        {instantLoading ? 'Importing…' : 'Import sound'}
-                      </button>
-                    </div>
-                    {instantStatus && <div className="c100-muted">{instantStatus}</div>}
                     <EffectPicker
                       effects={effects}
+                      onImport={importInstant}
                       addLabel="Add at the end"
                       onAdd={effect => setTrackItems(prev => [...prev, effectItem(effect)])}
                     />
@@ -317,6 +293,7 @@ export const Club100Page: React.FC = () => {
                 activeItemId={activeItemId}
                 onPlayItem={handlePlayItem}
                 onRetryClip={retryClip}
+                onImportEffect={importInstant}
                 headerExtra={songsWithoutStart > 0 && (
                   <button
                     type="button"
