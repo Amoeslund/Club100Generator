@@ -16,6 +16,7 @@ import {
   effectItem,
   parseImportLine,
 } from './timeline';
+import { loadTimeline, saveTimeline } from './storage';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
 const DEMO_SONGS: Song[] = [
@@ -24,17 +25,10 @@ const DEMO_SONGS: Song[] = [
 ];
 
 export const Club100Page: React.FC = () => {
-  const [trackItems, setTrackItems] = useState<TrackItem[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('club100_trackItems');
-      if (saved) {
-        try {
-          return ensureIds(JSON.parse(saved));
-        } catch {}
-      }
-    }
-    return [];
-  });
+  const [trackItems, setTrackItems] = useState<TrackItem[]>([]);
+  // Don't persist until the saved timeline has been loaded, or we'd overwrite it with [].
+  const [timelineLoaded, setTimelineLoaded] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [importText, setImportText] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('club100_importText') || '';
@@ -45,22 +39,36 @@ export const Club100Page: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Persist to localStorage on change
+  // Load the saved timeline once; seed demo songs if there is none.
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('club100_trackItems', JSON.stringify(trackItems));
-    }
-  }, [trackItems]);
+    loadTimeline()
+      .catch(err => {
+        console.error('Failed to load saved timeline', err);
+        return null;
+      })
+      .then(saved => {
+        setTrackItems(saved && saved.length > 0 ? ensureIds(saved) : DEMO_SONGS.map(songItem));
+        setTimelineLoaded(true);
+      });
+  }, []);
+
+  // Persist on change. A failed save must never crash the page (recordings live in this state).
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (!timelineLoaded) return;
+    saveTimeline(trackItems)
+      .then(() => setSaveError(null))
+      .catch(err => {
+        console.error('Failed to save timeline', err);
+        setSaveError('Could not save the timeline in this browser. Your changes are only kept until you close or reload the page.');
+      });
+  }, [trackItems, timelineLoaded]);
+  useEffect(() => {
+    try {
       localStorage.setItem('club100_importText', importText);
+    } catch {
+      // Draft import text is a convenience; ignore quota errors.
     }
   }, [importText]);
-
-  // Seed the timeline with demo songs once if it starts empty.
-  useEffect(() => {
-    setTrackItems(prev => (prev.length === 0 ? DEMO_SONGS.map(songItem) : prev));
-  }, []);
 
   const handleAddSong = (song: Song) => setTrackItems(prev => addSong(prev, song));
   const handleAddSnippet = (snippet: Snippet, idx: number) =>
@@ -201,6 +209,9 @@ export const Club100Page: React.FC = () => {
   return (
     <div style={{ maxWidth: 600, margin: '40px auto', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
       <h1 style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 16 }}>Club 100 Generator</h1>
+      {saveError && (
+        <div style={{ border: '3px solid #c00', borderRadius: 8, background: '#ffe3e3', padding: 12, marginBottom: 16, fontWeight: 'bold' }}>{saveError}</div>
+      )}
       <SongSearch onAdd={handleAddSong} />
       {/* Auto effect after each song */}
       <div style={{ border: '3px solid #000', borderRadius: 8, background: '#fffbe6', padding: 12, marginBottom: 16 }}>
