@@ -134,3 +134,21 @@ class TestAddCustomEffect:
         assert len(main.EFFECTS) == 1
         import json
         assert [e['id'] for e in json.loads((tmp_path / 'custom_effects.json').read_text())] == ['mi_x']
+
+
+class TestLoudnormFilter:
+    def _tone(self, tmp_path, filt):
+        import subprocess
+        path = tmp_path / 'in.wav'
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', filt, str(path)], check=True)
+        return path
+
+    def test_measures_and_returns_linear_filter(self, tmp_path):
+        path = self._tone(tmp_path, 'sine=frequency=300:duration=3,volume=-30dB')
+        args = main.loudnorm_filter(path, -12)
+        assert args[0] == '-af'
+        assert 'loudnorm=I=-12' in args[1] and 'linear=true' in args[1] and 'measured_I=' in args[1]
+
+    def test_silence_leaves_level_unchanged(self, tmp_path):
+        path = self._tone(tmp_path, 'anullsrc=r=44100:cl=stereo:d=3')
+        assert main.loudnorm_filter(path, -12) == []

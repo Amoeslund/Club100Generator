@@ -265,6 +265,32 @@ CACHE_MAX_AGE_HOURS = float(os.environ.get("CACHE_MAX_AGE_HOURS", str(7 * 24)))
 YTDLP_TIMEOUT = int(os.environ.get("YTDLP_TIMEOUT", "300"))
 FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "180"))
 
+# Loudness targets (integrated LUFS). Songs are levelled so clips from different uploads sit at the
+# same volume; snippets a bit louder so recorded speech cuts through. Effects are left untouched.
+SONG_LUFS = float(os.environ.get("SONG_LUFS", "-12"))
+SNIPPET_LUFS = float(os.environ.get("SNIPPET_LUFS", "-10"))
+TRUE_PEAK_DB = -1.0
+
+def loudnorm_filter(path: Path, target_lufs: float) -> list[str]:
+    """ffmpeg args for two-pass (linear) loudness normalization of `path` to `target_lufs`.
+
+    Returns [] if the file can't be measured (e.g. silence or too short), so encoding falls back to
+    leaving the level unchanged.
+    """
+    base = f"loudnorm=I={target_lufs}:TP={TRUE_PEAK_DB}:LRA=11"
+    probe = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", f"{base}:print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=FFMPEG_TIMEOUT,
+    )
+    match = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", probe.stderr)
+    if probe.returncode != 0 or not match:
+        return []
+    m = json.loads(match.group(0))
+    if not all(re.fullmatch(r"-?\d+(\.\d+)?", str(m.get(k, ""))) for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")):
+        return []  # -inf for silent input
+    return ["-af", (f"{base}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
+                    f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")]
+
 # Per-video locks so two timeline entries with the same URL don't race on the cache file.
 _cache_locks_guard = threading.Lock()
 _cache_locks: dict[str, threading.Lock] = {}
@@ -413,7 +439,8 @@ def process_audio(data: dict) -> str:
                     song_raw = song_download_results.get(i)
                     song_std = job_dir / f"song_{i:03d}.mp3"
                     if song_raw and song_raw.exists():
-                        cmd = ["ffmpeg", "-y", "-i", str(song_raw), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
+                        cmd = ["ffmpeg", "-y", "-i", str(song_raw), *loudnorm_filter(song_raw, SONG_LUFS),
+                               "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
                         subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
                         song_raw.unlink(missing_ok=True)
                         return (i, song_std)
@@ -428,7 +455,8 @@ def process_audio(data: dict) -> str:
                         temp_upload = job_dir / f"snippet_{i:03d}_upload"
                         with open(temp_upload, 'wb') as f:
                             f.write(audio_bytes)
-                        cmd = ["ffmpeg", "-y", "-i", str(temp_upload), "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
+                        cmd = ["ffmpeg", "-y", "-i", str(temp_upload), *loudnorm_filter(temp_upload, SNIPPET_LUFS),
+                               "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
                         subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
                         temp_upload.unlink(missing_ok=True)
                         return (i, snippet_faded)

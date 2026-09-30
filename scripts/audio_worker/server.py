@@ -17,7 +17,7 @@ ALLOWED_ORIGINS = [o.strip() for o in os.environ.get('ALLOWED_ORIGINS', 'http://
 CORS(app, origins=ALLOWED_ORIGINS)
 
 # Cap request body size (uploaded snippets arrive as base64 data URLs).
-app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(100 * 1024 * 1024)))
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_CONTENT_LENGTH', str(2 * 1024 * 1024 * 1024)))
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
 
