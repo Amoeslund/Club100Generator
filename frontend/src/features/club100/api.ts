@@ -38,6 +38,24 @@ export function getDownloadUrl(jobId: string): string {
   return `${BACKEND_URL}/download/${jobId}`;
 }
 
+export type PreparedClip = { clipId: string; duration: number; start?: number };
+
+/** Build (or reuse) the finished, normalized clip for one timeline item on the backend. */
+export async function prepareClip(item: TrackItem): Promise<PreparedClip> {
+  const res = await fetch(`${BACKEND_URL}/clips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Clip failed (${res.status})`);
+  return data;
+}
+
+export function getClipUrl(clipId: string): string {
+  return `${BACKEND_URL}/clips/${clipId}`;
+}
+
 // --- YouTube Search ---
 /**
  * Search YouTube for songs via the Next.js `/api/youtube-search` route, which

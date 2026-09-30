@@ -1,4 +1,4 @@
-import React, { useEffect, useState, Suspense, lazy } from 'react';
+import React, { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
 import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
 import { GenerateButton } from './GenerateButton';
@@ -18,6 +18,8 @@ import {
   parseImportLine,
 } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
+import { useClips } from './useClips';
+import { TimelinePlayer, TimelinePlayerHandle } from './TimelinePlayer';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
 const DEMO_SONGS: Song[] = [
@@ -40,6 +42,17 @@ export const Club100Page: React.FC = () => {
   const [progress, setProgress] = useState<Club100Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Clips are prepared in the background as soon as items are added or edited. A random song start
+  // chosen by the backend is pinned into the item so preview and generated track match.
+  const pinStart = useCallback((id: string, start: number) => {
+    setTrackItems(prev => prev.map(it =>
+      it.id === id && it.type === 'song' && it.song.start === undefined ? { ...it, song: { ...it.song, start } } : it));
+  }, []);
+  const { clips, retry: retryClip } = useClips(trackItems, pinStart);
+  const playerRef = useRef<TimelinePlayerHandle>(null);
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const handlePlayItem = useCallback((id: string) => playerRef.current?.playItem(id), []);
 
   // Load the saved timeline once; seed demo songs if there is none.
   useEffect(() => {
@@ -211,7 +224,8 @@ export const Club100Page: React.FC = () => {
   const [autoEffectId, setAutoEffectId] = useState<string>('');
 
   return (
-    <div style={{ maxWidth: 600, margin: '40px auto', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
+    <div style={{ maxWidth: 600, margin: '40px auto 140px', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
+      <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} onActiveChange={setActiveItemId} />
       <h1 style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 16 }}>Club 100 Generator</h1>
       {saveError && (
         <div style={{ border: '3px solid #c00', borderRadius: 8, background: '#ffe3e3', padding: 12, marginBottom: 16, fontWeight: 'bold' }}>{saveError}</div>
@@ -319,6 +333,10 @@ export const Club100Page: React.FC = () => {
           selectedEffectId={selectedEffectId}
           setSelectedEffectId={setSelectedEffectId}
           onClearTimeline={() => setTrackItems([])}
+          clips={clips}
+          activeItemId={activeItemId}
+          onPlayItem={handlePlayItem}
+          onRetryClip={retryClip}
         />
       </Suspense>
       <GenerateButton onClick={handleGenerate} loading={loading} />

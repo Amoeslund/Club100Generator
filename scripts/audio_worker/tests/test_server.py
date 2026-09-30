@@ -133,3 +133,33 @@ class TestYtSearchOptionInjection:
         assert resp.status_code == 200
         cmd = seen['cmd']
         assert cmd[-2:] == ['--', '-U']
+
+
+class TestClipEndpoints:
+    def test_prepares_effect_clip_and_serves_it(self, client, monkeypatch, tmp_path):
+        import subprocess
+        import main
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=duration=2',
+                        str(tmp_path / 'fx.mp3')], check=True)
+        monkeypatch.setattr(main, 'CLIP_CACHE_DIR', tmp_path / 'clips')
+        monkeypatch.setattr(server, 'CLIP_CACHE_DIR', tmp_path / 'clips')
+        (tmp_path / 'clips').mkdir()
+        monkeypatch.setattr(main, 'EFFECTS_DIR', tmp_path)
+        monkeypatch.setitem(main.EFFECTS_MAP, 'fx', {'id': 'fx', 'audioUrl': '/effects/fx.mp3'})
+
+        resp = client.post('/clips', json={'item': {'type': 'effect', 'effect': {'id': 'fx'}}})
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert 1.9 < body['duration'] < 2.2
+
+        audio = client.get(f"/clips/{body['clipId']}", headers={'Range': 'bytes=0-99'})
+        assert audio.status_code == 206
+        assert len(audio.data) == 100
+
+    def test_bad_item_is_422_with_reason(self, client):
+        resp = client.post('/clips', json={'item': {'type': 'effect', 'effect': {'id': 'does-not-exist'}}})
+        assert resp.status_code == 422
+        assert 'does-not-exist' in resp.get_json()['error']
+
+    def test_rejects_path_traversal(self, client):
+        assert client.get('/clips/..%5Cmain.py').status_code in (400, 404)

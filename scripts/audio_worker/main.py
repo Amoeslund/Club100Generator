@@ -393,8 +393,11 @@ def encode_clip(inputs: list[str], out: Path, target_lufs: float | None) -> Path
         os.replace(partial, out)
     return out
 
-def song_clip(url, start_override=None) -> Path:
-    """Normalized 60s clip of a YouTube video, from `start_override` or a random start."""
+def song_clip(url, start_override=None) -> tuple[Path, int]:
+    """Normalized 60s clip of a YouTube video, from `start_override` or a random start.
+
+    Returns (clip path, start second actually used).
+    """
     if not is_valid_youtube_url(url):
         raise ValueError(f"Refusing to download non-YouTube URL: {url!r}")
     full = ensure_cached(url)
@@ -406,7 +409,7 @@ def song_clip(url, start_override=None) -> Path:
     else:
         start = random.randint(0, int(duration) - 60)
     clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start}_{SONG_LUFS:g}.mp3"
-    return encode_clip(["-ss", str(start), "-t", "60", "-i", str(full)], clip, SONG_LUFS)
+    return encode_clip(["-ss", str(start), "-t", "60", "-i", str(full)], clip, SONG_LUFS), start
 
 def snippet_clip(audio_bytes: bytes, scratch_dir: Path) -> Path:
     """Normalized clip of an uploaded/recorded snippet, cached by content hash."""
@@ -423,6 +426,28 @@ def effect_clip(effect_path: Path) -> Path:
     """Effect re-encoded to the clip format at its original level (no loudnorm)."""
     clip = CLIP_CACHE_DIR / f"effect_{effect_path.stem}_{int(effect_path.stat().st_mtime)}.mp3"
     return encode_clip(["-i", str(effect_path)], clip, None)
+
+def build_clip(item: dict, scratch_dir: Path) -> tuple[Path, dict]:
+    """Finished clip for one timeline item. Returns (clip path, info), where info carries
+    the song start actually used so a random start can be pinned by the caller."""
+    kind = item.get('type')
+    if kind == 'song' and isinstance(item.get('song'), dict):
+        clip, start = song_clip(item['song'].get('url'), item['song'].get('start'))
+        return clip, {'start': start}
+    if kind == 'snippet' and isinstance(item.get('snippet'), dict):
+        snippet = item['snippet']
+        if snippet.get('type') != 'upload' or not snippet.get('audioUrl'):
+            raise ValueError(f"unsupported snippet type {snippet.get('type')!r}")
+        return snippet_clip(decode_data_url(snippet['audioUrl']), scratch_dir), {}
+    if kind == 'effect' and isinstance(item.get('effect'), dict):
+        effect_meta = EFFECTS_MAP.get(item['effect'].get('id'))
+        if not effect_meta:
+            raise ValueError(f"unknown effect id {item['effect'].get('id')!r}")
+        effect_path = EFFECTS_DIR / effect_meta['audioUrl'].split('/')[-1]
+        if not effect_path.exists():
+            raise FileNotFoundError(effect_path)
+        return effect_clip(effect_path), {}
+    raise ValueError(f"unknown item type {kind!r}")
 
 # --- Main Processing Function ---
 def item_label(i: int, item: dict) -> str:
@@ -475,29 +500,10 @@ def process_audio(data: dict, job_id: str | None = None, progress=None) -> str:
                 report('download', done, len(urls))
 
         # 2. Build a normalized clip per item (CPU bound, cached per song/start, snippet and effect).
-        def build(i, item):
-            kind = item.get('type')
-            if kind == 'song' and isinstance(item.get('song'), dict):
-                return song_clip(item['song'].get('url'), item['song'].get('start'))
-            if kind == 'snippet' and isinstance(item.get('snippet'), dict):
-                snippet = item['snippet']
-                if snippet.get('type') != 'upload' or not snippet.get('audioUrl'):
-                    raise ValueError(f"unsupported snippet type {snippet.get('type')!r}")
-                return snippet_clip(decode_data_url(snippet['audioUrl']), job_dir)
-            if kind == 'effect' and isinstance(item.get('effect'), dict):
-                effect_meta = EFFECTS_MAP.get(item['effect'].get('id'))
-                if not effect_meta:
-                    raise ValueError(f"unknown effect id {item['effect'].get('id')!r}")
-                effect_path = EFFECTS_DIR / effect_meta['audioUrl'].split('/')[-1]
-                if not effect_path.exists():
-                    raise FileNotFoundError(effect_path)
-                return effect_clip(effect_path)
-            raise ValueError(f"unknown item type {kind!r}")
-
         clips: dict[int, Path] = {}
         report('process', 0, len(timeline))
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
-            futures = {executor.submit(build, i, item): i for i, item in enumerate(timeline)}
+            futures = {executor.submit(lambda it: build_clip(it, job_dir)[0], item): i for i, item in enumerate(timeline)}
             for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 i = futures[future]
                 try:

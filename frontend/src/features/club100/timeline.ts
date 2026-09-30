@@ -129,3 +129,57 @@ export function getYoutubeId(url: string): string | null {
   );
   return match ? match[1] : null;
 }
+
+/** Cheap string hash (FNV-1a) so large snippet data URLs can be compared by value. */
+function hashString(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36) + s.length.toString(36);
+}
+
+/** Identity of the audio an item produces: a changed key means its clip must be rebuilt. */
+export function clipKey(item: TrackItem): string {
+  if (item.type === 'song') return `song|${item.song.url}|${item.song.start ?? ''}`;
+  if (item.type === 'effect') return `effect|${item.effect.id}`;
+  return `snippet|${hashString(item.snippet.audioUrl ?? '')}`;
+}
+
+export type Segment = { id: string; clipId: string; start: number; duration: number };
+
+/** Lay the ready clips end to end in timeline order; items without a ready clip are left out. */
+export function buildSegments(
+  items: TrackItem[],
+  clips: Record<string, { status: string; clipId?: string; duration?: number } | undefined>,
+): Segment[] {
+  const segments: Segment[] = [];
+  let t = 0;
+  for (const item of items) {
+    const clip = clips[item.id];
+    if (clip?.status !== 'ready' || !clip.clipId || !clip.duration) continue;
+    segments.push({ id: item.id, clipId: clip.clipId, start: t, duration: clip.duration });
+    t += clip.duration;
+  }
+  return segments;
+}
+
+/** Find the segment containing global time `t` and the offset into it (clamped to the ends). */
+export function locate(segments: Segment[], t: number): { index: number; offset: number } | null {
+  if (segments.length === 0) return null;
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    if (t < s.start + s.duration) return { index: i, offset: Math.max(0, t - s.start) };
+  }
+  const last = segments.length - 1;
+  return { index: last, offset: segments[last].duration };
+}
+
+export function formatTime(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}

@@ -5,11 +5,12 @@ import os
 import queue
 import re
 import subprocess
+import tempfile
 import threading
 import traceback
 import uuid
 import pathlib
-from main import process_audio, EFFECTS, YTDLP, is_valid_youtube_url
+from main import process_audio, build_clip, probe_duration, CLIP_CACHE_DIR, EFFECTS, YTDLP, is_valid_youtube_url
 from myinstants import import_myinstants
 from best_start import find_best_start
 from flask_cors import CORS
@@ -107,6 +108,44 @@ def generate():
                 return
 
     return Response(stream(), mimetype='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+
+
+def _clip_error(e: Exception) -> str:
+    """Short, user-facing reason a clip failed (full details go to the server log)."""
+    if isinstance(e, subprocess.TimeoutExpired):
+        return f"{e.cmd[0]} timed out"
+    if isinstance(e, subprocess.CalledProcessError):
+        tool = e.cmd[0] if isinstance(e.cmd, list) else 'command'
+        return f"{tool} failed (exit {e.returncode}); the video may be unavailable or region-locked"
+    if isinstance(e, (ValueError, FileNotFoundError)):
+        return str(e)
+    return 'Clip preparation failed'
+
+
+@app.route('/clips', methods=['POST'])
+def prepare_clip():
+    """Build (or reuse) the finished clip for one timeline item, so the UI can preview it.
+
+    Body: {"item": TrackItem}. Returns {"clipId", "duration", "start"?}.
+    """
+    item = (request.get_json(silent=True) or {}).get('item')
+    if not isinstance(item, dict):
+        return jsonify({'error': 'Missing item'}), 400
+    try:
+        with tempfile.TemporaryDirectory(prefix='club100_clip_') as scratch:
+            clip, info = build_clip(item, pathlib.Path(scratch))
+        return jsonify({'clipId': clip.name, 'duration': probe_duration(clip), **info})
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': _clip_error(e)}), 422
+
+
+@app.route('/clips/<clip_id>', methods=['GET'])
+def serve_clip(clip_id):
+    """Serve a prepared clip (supports Range requests so the player can seek)."""
+    if not re.fullmatch(r'[\w.-]+\.mp3', clip_id):
+        return jsonify({'error': 'Invalid clip id'}), 400
+    return send_from_directory(CLIP_CACHE_DIR, clip_id, mimetype='audio/mpeg', max_age=3600)
 
 
 @app.route('/download/<job_id>', methods=['GET'])

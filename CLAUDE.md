@@ -42,7 +42,7 @@ Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HO
 ## Architecture
 
 ### Request flow
-- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
+- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/clips`, `/clips/<clipId>`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
 - YouTube search goes through the Next route `frontend/src/app/api/youtube-search/route.ts` (helpers in `youtube.ts`). It uses the YouTube Data API when a key is set, with the backend's `/ytsearch` (yt-dlp) as fallback. The client caches results in `localStorage` for 24h.
 
 ### Timeline contract
@@ -62,6 +62,9 @@ Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `
 Failed items are logged and skipped without failing the job; their labels are reported in `skipped` and shown under the download link. Output files are pruned after 1h and cache/clip files after `CACHE_MAX_AGE_HOURS` without use.
 
 All yt-dlp invocations must go through `YTDLP` in `main.py` (`--js-runtimes node --no-playlist`) and pass a timeout. User-supplied search text goes after `--` so it can't be parsed as a flag.
+
+### Clip preview and timeline player
+Every item is prepared as soon as it is added or edited: `useClips.ts` queues `POST /clips` (`build_clip`, max 6 in flight) whenever an item's `clipKey` (`timeline.ts`) changes, and keeps `{status, clipId, duration}` per item id; stale responses are dropped by key. A song without a `start` gets a random one from the backend, which is pinned into the item so the preview and the generated track use the same minute. `TimelinePlayer.tsx` (fixed bottom bar) plays the ready clips back to back from `GET /clips/<clipId>` (Range support) with a scrub bar over the whole timeline, reports the playing item for highlighting, and `TrackTimeline.tsx` shows a per-item ▶ / ⏳ / ❌-retry control. `SortableTrackItem` lives at module level so rows don't remount on every render.
 
 ### Best start time (`best_start.py`, `POST /best-start`)
 Picks the best 60s window from YouTube's "most replayed" heatmap. It removes the linear viewer drop-off trend, ignores the first 8% of the video and starts 6s before the hotspot. Videos without a heatmap fall back to the loudest minute of the audio, reusing the generator's cache file.

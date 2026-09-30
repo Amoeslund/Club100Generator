@@ -10,6 +10,10 @@ import {
   moveItem,
   updateAt,
   injectAutoEffect,
+  clipKey,
+  buildSegments,
+  locate,
+  formatTime,
   songNumberAt,
   parseImportLine,
   parseStartParam,
@@ -166,5 +170,35 @@ describe('parseStartParam', () => {
   it('is applied by parseImportLine', () => {
     const parsed = parseImportLine('https://www.youtube.com/watch?v=abcdefghijk&t=42	My Song');
     expect(parsed).toEqual({ kind: 'url', song: { url: 'https://www.youtube.com/watch?v=abcdefghijk&t=42', title: 'My Song', start: 42 } });
+  });
+});
+
+describe('clip helpers', () => {
+  const song = songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 10 });
+  const fx = effectItem({ id: 'airhorn', name: 'Airhorn', audioUrl: '/effects/airhorn.mp3' });
+  const snip = snippetItem({ type: 'upload', audioUrl: 'data:audio/wav;base64,AAAA' });
+
+  it('clipKey changes when the audio changes', () => {
+    expect(clipKey(song)).toBe(clipKey({ ...song }));
+    expect(clipKey(song)).not.toBe(clipKey(songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 11 })));
+    expect(clipKey(snip)).not.toBe(clipKey(snippetItem({ type: 'upload', audioUrl: 'data:audio/wav;base64,AAAB' })));
+    expect(clipKey(fx)).toBe('effect|airhorn');
+  });
+
+  it('buildSegments skips unready clips and locate finds offsets', () => {
+    const segs = buildSegments([song, snip, fx], {
+      [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 },
+      [snip.id]: { status: 'pending' },
+      [fx.id]: { status: 'ready', clipId: 'fx.mp3', duration: 3 },
+    });
+    expect(segs.map(s => [s.id, s.start])).toEqual([[song.id, 0], [fx.id, 60]]);
+    expect(locate(segs, 61.5)).toEqual({ index: 1, offset: 1.5 });
+    expect(locate(segs, 999)).toEqual({ index: 1, offset: 3 });
+    expect(locate([], 0)).toBeNull();
+  });
+
+  it('formatTime', () => {
+    expect(formatTime(65)).toBe('1:05');
+    expect(formatTime(5942)).toBe('1:39:02');
   });
 });
