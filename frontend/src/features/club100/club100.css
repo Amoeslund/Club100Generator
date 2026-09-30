@@ -203,6 +203,20 @@ body { margin: 0; }
   .c100-player .c100-grid, .c100-player .c100-grid-foot { display: none; }
   .c100-insert, .c100-editor { padding-left: 16px; }
 }
+.c100-now-minute.is-idle { color: var(--line); }
+
+/* Touch screens have no hover: keep row actions visible. */
+@media (hover: none) {
+  .c100-row .c100-reveal { opacity: 1; }
+}
+@media (max-width: 640px) {
+  .c100-row { grid-template-columns: 22px 34px minmax(0, 1fr); row-gap: 4px; }
+  .c100-row .c100-row-actions { grid-column: 3; }
+  .c100-row[data-type='section'] { grid-template-columns: 22px minmax(0, 1fr); }
+  .c100-row[data-type='section'] .c100-row-actions { grid-column: 2; }
+  .c100-row-title { white-space: normal; }
+  .c100-header { align-items: flex-start; }
+}
 @media (prefers-reduced-motion: reduce) {
   .c100-cell.is-playing::after, .c100-spin { animation: none; }
   .c100-meter > div { transition: none; }

@@ -329,7 +329,7 @@ export const Club100Page: React.FC = () => {
           </main>
 
           <aside className="c100-side" aria-label="Player and export">
-            <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} afterSong={autoEffect ? clips[AFTER_SONG_ID] : undefined} onActiveChange={setActiveItemId} />
+            <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} afterSong={autoEffect ? clips[AFTER_SONG_ID] : undefined} afterSongName={autoEffect?.name} onActiveChange={setActiveItemId} />
 
             <div className="c100-panel c100-stack">
               <label className="c100-stack" style={{ gap: 4 }}>

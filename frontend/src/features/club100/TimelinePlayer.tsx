@@ -25,8 +25,10 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
   items: TrackItem[];
   clips: Record<string, ClipState>;
   afterSong?: ClipState;
+  /** Name of the effect played after every song, for the "now playing" line. */
+  afterSongName?: string;
   onActiveChange: (id: string | null) => void;
-}>(({ items, clips, afterSong, onActiveChange }, ref) => {
+}>(({ items, clips, afterSong, afterSongName, onActiveChange }, ref) => {
   const segments = useMemo(() => buildSegments(items, clips, afterSong), [items, clips, afterSong]);
   const total = segments.length ? segments[segments.length - 1].start + segments[segments.length - 1].duration : 0;
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -177,7 +179,7 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
         }}
       />
       <div className="c100-now" aria-live="polite">
-        <span className="c100-now-minute">{shownMinute ?? '–'}</span>
+        <span className={`c100-now-minute${shownMinute ? '' : ' is-idle'}`}>{shownMinute ?? 0}</span>
         <span className="c100-now-of">of {Math.max(MINUTES, songs.length)}</span>
       </div>
       <button
@@ -188,7 +190,7 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
         title={currentItem ? 'Show in the running order' : undefined}
       >
         {currentItem
-          ? `${current?.id.endsWith(':after') ? 'After-song effect' : itemTitle(currentItem)}${sectionOf.get(currentItem.id) ? `, ${sectionOf.get(currentItem.id)}` : ''}`
+          ? `${current?.id.endsWith(':after') ? `${afterSongName ?? 'Sound effect'}, after ${itemTitle(currentItem)}` : itemTitle(currentItem)}${sectionOf.get(currentItem.id) ? `, ${sectionOf.get(currentItem.id)}` : ''}`
           : readyCount ? 'Press play to hear your Club 100' : 'Add songs to hear your Club 100'}
       </button>
 

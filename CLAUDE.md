@@ -42,16 +42,20 @@ Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HO
 ## Architecture
 
 ### Request flow
-- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/clips`, `/clips/<clipId>`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
+- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/clips`, `/clips/<clipId>`, `/songs/<videoId>/audio`, `/songs/<videoId>/peaks`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
 - YouTube search goes through the Next route `frontend/src/app/api/youtube-search/route.ts` (helpers in `youtube.ts`). It uses the YouTube Data API when a key is set, with the backend's `/ytsearch` (yt-dlp) as fallback. The client caches results in `localStorage` for 24h.
 
 ### Timeline contract
-The app revolves around an ordered `TrackItem[]` (`types.ts`), each with a stable `id`, POSTed as `{ timeline }` to `/generate`:
-- `song`: `{ url, title, start? }`. `start` pins the clip start; otherwise a random 60s window is chosen.
-- `snippet`: `{ type: 'upload', audioUrl }`, where `audioUrl` is a base64 `data:` URL (browser recordings/uploads are sent inline). There is no TTS.
+The app revolves around an ordered `TrackItem[]` (`types.ts`), each with a stable `id`. It is persisted in IndexedDB (`storage.ts`, DB `club100`, store `kv`, key `trackItems`) and the stored format must stay backward compatible: add optional fields or new item types, never rename or migrate existing ones. `storage.ts` keeps one untouched daily backup (`trackItems.backup.YYYY-MM-DD`, last 3), taken on load and on a session's first save, and `BackupControls.tsx` exports/imports the timeline as JSON.
+- `song`: `{ url, title, start?, end? }`. `start` (seconds, 0.1s precision) pins the clip start; otherwise a random start is chosen and then pinned. Optional `end` shortens the clip (never beyond 60s).
+- `snippet`: `{ type: 'upload', audioUrl, label? }`, where `audioUrl` is a base64 `data:` URL (browser recordings/uploads are sent inline). There is no TTS.
 - `effect`: `{ id, ... }`; only `id` is used server-side, looked up in `EFFECTS_MAP`.
+- `section`: `{ title }`, an optional user-added heading of any length. No audio: `audioTimeline()` strips sections before `/generate`, and `process_audio` ignores them too. Songs are numbered (minute 1, 2, ...) across sections.
 
-Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `timeline.test.ts`). Mass import lines are either a YouTube URL (a `?t=` start time becomes `song.start`) followed by an optional tab/comma-separated title, or a free-text search query. UI state lives in `Club100Page.tsx`; `TrackTimeline.tsx` is the lazy-loaded dnd-kit timeline.
+Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `timeline.test.ts`). Mass import lines are either a YouTube URL (a `?t=` start time becomes `song.start`) followed by an optional tab/comma-separated title, or a free-text search query. UI state lives in `Club100Page.tsx`; `TrackTimeline.tsx` is the lazy-loaded dnd-kit running order (rows live at module level so they don't remount on every render).
+
+### UI and design
+Styles live in `club100.css` as `c100-*` classes with CSS-variable tokens; one typeface (Bricolage Grotesque via `next/font` in `app/layout.tsx`). Colour carries meaning only: song yellow, snippet pink, effect blue, red only for what is playing and what failed. The tool is a generic Club 100 generator, not tied to one party's theme. Layout: running order on the left, a sticky sidebar with `TimelinePlayer.tsx` (big current minute, scrub bar, 100-minute grid) and the MP3 export; below 980px the player becomes a fixed bottom bar.
 
 ### Audio pipeline (`scripts/audio_worker/main.py`, `process_audio`)
 `/generate` streams NDJSON progress on the same response (`{status:'processing', stage, done, total, skipped}` lines, then a final `done` with `jobId` or `error`). `process_audio` runs in its own thread so it finishes even if the browser disconnects. `generateTrack` in `api.ts` reads the stream and `GenerateProgress.tsx` renders it. No polling.
@@ -63,8 +67,10 @@ Failed items are logged and skipped without failing the job; their labels are re
 
 All yt-dlp invocations must go through `YTDLP` in `main.py` (`--js-runtimes node --no-playlist`) and pass a timeout. User-supplied search text goes after `--` so it can't be parsed as a flag.
 
-### Clip preview and timeline player
-Every item is prepared as soon as it is added or edited: `useClips.ts` queues `POST /clips` (`build_clip`, max 6 in flight) whenever an item's `clipKey` (`timeline.ts`) changes, and keeps `{status, clipId, duration}` per item id; stale responses are dropped by key. A song without a `start` gets a random one from the backend, which is pinned into the item so the preview and the generated track use the same minute. `TimelinePlayer.tsx` (fixed bottom bar) plays the ready clips back to back from `GET /clips/<clipId>` (Range support) with a scrub bar over the whole timeline, reports the playing item for highlighting, and `TrackTimeline.tsx` shows a per-item ▶ / ⏳ / ❌-retry control. `SortableTrackItem` lives at module level so rows don't remount on every render.
+### Clip preview, song editor and player
+Every item is prepared as soon as it is added or edited: `useClips.ts` queues `POST /clips` (`build_clip`, max 6 in flight, network errors retried) whenever an item's `clipKey` (`timeline.ts`) changes, and keeps `{status, clipId, duration}` per item id; stale responses are dropped by key. A song without a `start` gets a random one from the backend, which is pinned into the item so the preview and the generated track use the same minute. The "after every song" effect is prepared under the pseudo id `__after-song` and inserted after each song by `buildSegments`, so the preview matches the MP3. `TimelinePlayer.tsx` plays the ready clips back to back from `GET /clips/<clipId>` (Range support). Only one `<audio>` plays at a time (a capture-phase `play` listener in `Club100Page.tsx`).
+
+`SongEditor.tsx` ("Edit clip") draws the full song's waveform from `GET /songs/<videoId>/peaks` (`song_peaks`, cached as `cache/<id>.peaks.json`) and plays `GET /songs/<videoId>/audio` (the cached full file). Drag the clip window or its edges to set `start`/`end`; changes apply on release and rebuild the clip.
 
 ### Best start time (`best_start.py`, `POST /best-start`)
 Picks the best 60s window from YouTube's "most replayed" heatmap. It removes the linear viewer drop-off trend, ignores the first 8% of the video and starts 6s before the hotspot. Videos without a heatmap fall back to the loudest minute of the audio, reusing the generator's cache file.
