@@ -8,5 +8,10 @@
     "id": "mi_clown",
     "name": "Clown",
     "audioUrl": "/effects/mi-clown.mp3"
+  },
+  {
+    "id": "klovne_hardbass_edit",
+    "name": "Entry of the Gladiators - Klovne Hardbass Edit (nr. 100)",
+    "audioUrl": "/effects/klovne-hardbass-edit.mp3"
   }
 ]
