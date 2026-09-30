@@ -3,7 +3,10 @@ from flask import send_from_directory
 import os
 import re
 import subprocess
+import threading
+import time
 import traceback
+import uuid
 import pathlib
 from main import process_audio, EFFECTS, YTDLP, is_valid_youtube_url
 from myinstants import import_myinstants
@@ -60,24 +63,64 @@ def serve_effect(filename):
     """Serve an effect audio file by filename."""
     return send_from_directory(EFFECTS_DIR, filename)
 
+# In-memory job registry for /generate progress. Jobs are dropped after JOB_TTL seconds.
+JOBS: dict[str, dict] = {}
+JOBS_LOCK = threading.Lock()
+JOB_TTL = 60 * 60
+
+
+def _update_job(job_id, **fields):
+    with JOBS_LOCK:
+        JOBS[job_id].update(fields, updated=time.time())
+
+
+def _run_job(job_id, data):
+    def progress(stage, done, total, skipped):
+        _update_job(job_id, stage=stage, done=done, total=total, skipped=skipped)
+    try:
+        output_path = process_audio(data, job_id=job_id, progress=progress)
+        if not output_path or not os.path.exists(output_path):
+            _update_job(job_id, status='error', error='Audio generation failed, no output file was produced.')
+        else:
+            _update_job(job_id, status='done', stage='done')
+    except Exception as e:
+        # Log the full traceback server-side, but don't leak internals to the client.
+        print(traceback.format_exc())
+        _update_job(job_id, status='error', error=str(e))
+
+
 @app.route('/generate', methods=['POST'])
 def generate():
-    """Generate audio from a timeline or legacy format."""
+    """Start generating audio from a timeline (or legacy format) in the background.
+
+    Returns 202 with a jobId; poll GET /jobs/<jobId> for progress.
+    """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid or missing JSON body"}), 400
     if 'timeline' not in data:
         data['timeline'] = build_timeline_from_legacy(data)
-    try:
-        output_path = process_audio(data)
-        if not output_path or not os.path.exists(output_path):
-            return jsonify({"error": "Audio generation failed, no output file was produced."}), 500
-        job_id = os.path.basename(output_path).replace('club100_', '').replace('.mp3', '')
-        return jsonify({"jobId": job_id})
-    except Exception as e:
-        # Log the full traceback server-side, but don't leak internals to the client.
-        print(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
+    job_id = str(uuid.uuid4())
+    now = time.time()
+    with JOBS_LOCK:
+        for old_id in [j for j, job in JOBS.items() if now - job['updated'] > JOB_TTL]:
+            del JOBS[old_id]
+        JOBS[job_id] = {'status': 'processing', 'stage': 'queued', 'done': 0, 'total': 0,
+                        'skipped': [], 'error': None, 'updated': now}
+    threading.Thread(target=_run_job, args=(job_id, data), daemon=True).start()
+    return jsonify({"jobId": job_id}), 202
+
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def job_status(job_id):
+    """Progress of a /generate job."""
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        job = dict(job) if job else None
+    if job is None:
+        return jsonify({"error": "Unknown job"}), 404
+    job.pop('updated', None)
+    return jsonify({"jobId": job_id, **job})
 
 @app.route('/download/<job_id>', methods=['GET'])
 def download(job_id):

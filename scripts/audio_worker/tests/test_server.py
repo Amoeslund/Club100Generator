@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -55,16 +56,44 @@ class TestGenerateEndpoint:
         resp = client.post('/generate', data='not json', content_type='text/plain')
         assert resp.status_code == 400
 
+    @staticmethod
+    def wait_for_job(client, job_id):
+        for _ in range(200):
+            body = client.get(f'/jobs/{job_id}').get_json()
+            if body['status'] != 'processing':
+                return body
+            time.sleep(0.01)
+        raise AssertionError('job did not finish')
+
     def test_error_response_has_no_traceback(self, client, monkeypatch):
-        def boom(_data):
+        def boom(_data, **_kwargs):
             raise RuntimeError('kaboom')
 
         monkeypatch.setattr(server, 'process_audio', boom)
         resp = client.post('/generate', json={'timeline': []})
-        assert resp.status_code == 500
-        body = resp.get_json()
+        assert resp.status_code == 202
+        body = self.wait_for_job(client, resp.get_json()['jobId'])
+        assert body['status'] == 'error'
         assert 'traceback' not in body
         assert body['error'] == 'kaboom'
+
+    def test_reports_progress_and_done(self, client, monkeypatch, tmp_path):
+        out = tmp_path / 'out.mp3'
+        out.write_bytes(b'x')
+
+        def fake(_data, job_id=None, progress=None):
+            progress('process', 1, 2, ['Broken Song'])
+            return str(out)
+
+        monkeypatch.setattr(server, 'process_audio', fake)
+        job_id = client.post('/generate', json={'timeline': []}).get_json()['jobId']
+        body = self.wait_for_job(client, job_id)
+        assert body['status'] == 'done'
+        assert body['skipped'] == ['Broken Song']
+        assert body['total'] == 2
+
+    def test_unknown_job(self, client):
+        assert client.get('/jobs/nope').status_code == 404
 
 
 class TestYtSearchEndpoint:

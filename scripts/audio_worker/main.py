@@ -390,13 +390,34 @@ def download_random_youtube_audio(url, out_path, start_override=None):
     temp_audio.unlink(missing_ok=True)
 
 # --- Main Processing Function ---
-def process_audio(data: dict) -> str:
-    """Process the timeline and generate the final audio file. Returns output path."""
+def item_label(i: int, item: dict) -> str:
+    """Human-readable label for a timeline item, used in progress and skip reports."""
+    kind = item.get('type')
+    if kind == 'song':
+        return (item.get('song') or {}).get('title') or f"Song #{i + 1}"
+    if kind == 'effect':
+        effect = item.get('effect') or {}
+        return effect.get('name') or effect.get('id') or f"Effect #{i + 1}"
+    return f"{kind or 'Item'} #{i + 1}"
+
+
+def process_audio(data: dict, job_id: str | None = None, progress=None) -> str:
+    """Process the timeline and generate the final audio file. Returns output path.
+
+    `progress(stage, done, total, skipped)` is called as work completes, where
+    stage is 'download', 'process' or 'concat' and skipped lists item labels.
+    """
     timeline = data.get("timeline", [])
+    skipped: list[str] = []
+
+    def report(stage, done, total):
+        if progress:
+            progress(stage, done, total, list(skipped))
+
     # Bound disk usage: drop stale generated output (1h) and cached downloads (24h).
     cleanup_old_files(OUTPUT_DIR, 60 * 60)
     cleanup_old_files(CACHE_DIR, CACHE_MAX_AGE_HOURS * 60 * 60)
-    job_id = str(uuid.uuid4())
+    job_id = job_id or str(uuid.uuid4())
     job_dir = Path(tempfile.gettempdir()) / f"club100_{job_id}"
     job_dir.mkdir(exist_ok=True)
     audio_files = []
@@ -419,15 +440,17 @@ def process_audio(data: dict) -> str:
             except Exception as e:
                 print(f"Error downloading {url}: {e}", file=sys.stderr)
                 return (i, None)
+        report('download', 0, len(song_download_tasks))
         if song_download_tasks:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
-                for future in concurrent.futures.as_completed(futures):
+                for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                     result = future.result()
                     if result is not None and isinstance(result, tuple) and len(result) == 2:
                         i, song_raw = result
                         if i is not None and song_raw is not None:
                             song_download_results[i] = song_raw
+                    report('download', done, len(song_download_tasks))
 
         # 2. Process all timeline items in parallel (re-encode/generate/copy)
         def process_item_task(args):
@@ -487,15 +510,19 @@ def process_audio(data: dict) -> str:
 
         item_tasks = [(i, item) for i, item in enumerate(timeline)]
         processed_results = {}
+        report('process', 0, len(item_tasks))
         if item_tasks:
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = [executor.submit(process_item_task, args) for args in item_tasks]
-                for future in concurrent.futures.as_completed(futures):
+                for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                     result = future.result()
                     if result is not None and isinstance(result, tuple) and len(result) == 2:
                         i, out_path = result
                         if i is not None and out_path is not None:
                             processed_results[i] = out_path
+                        elif i is not None:
+                            skipped.append(item_label(i, timeline[i]))
+                    report('process', done, len(item_tasks))
 
         # 3. Collect processed audio files in timeline order
         audio_files = []
@@ -511,6 +538,7 @@ def process_audio(data: dict) -> str:
                 if not af.exists() or af.stat().st_size == 0:
                     print(f"[WARN] File missing or empty before concat: {af}", file=sys.stderr)
                 f.write(f"file '{af.as_posix()}'\n")
+        report('concat', 0, 1)
         output_mp3 = OUTPUT_DIR / f"club100_{job_id}.mp3"
         # Re-encode the concatenated audio to ensure valid MP3 output
         cmd_concat = [

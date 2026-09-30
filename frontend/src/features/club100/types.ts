@@ -13,9 +13,17 @@ export type Snippet = {
   audioUrl?: string;
 };
 
+export type Club100JobStage = 'upload' | 'queued' | 'download' | 'process' | 'concat' | 'done';
+
 export type Club100Job = {
   jobId: string;
   status: 'processing' | 'done' | 'error';
+  stage: Club100JobStage;
+  done: number;
+  total: number;
+  /** Labels of timeline items that failed and were left out of the track. */
+  skipped: string[];
+  error?: string | null;
   downloadUrl?: string;
 };
 

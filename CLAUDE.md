@@ -42,7 +42,7 @@ Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HO
 ## Architecture
 
 ### Request flow
-- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
+- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/jobs/<jobId>`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
 - YouTube search goes through the Next route `frontend/src/app/api/youtube-search/route.ts` (helpers in `youtube.ts`). It uses the YouTube Data API when a key is set, with the backend's `/ytsearch` (yt-dlp) as fallback. The client caches results in `localStorage` for 24h.
 
 ### Timeline contract
@@ -54,12 +54,12 @@ The app revolves around an ordered `TrackItem[]` (`types.ts`), each with a stabl
 Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `timeline.test.ts`). Mass import lines are either a YouTube URL (a `?t=` start time becomes `song.start`) followed by an optional tab/comma-separated title, or a free-text search query. UI state lives in `Club100Page.tsx`; `TrackTimeline.tsx` is the lazy-loaded dnd-kit timeline.
 
 ### Audio pipeline (`scripts/audio_worker/main.py`, `process_audio`)
-Synchronous: `/generate` blocks until the MP3 is done.
+`/generate` returns 202 with a `jobId` and runs `process_audio` in a background thread; the frontend (`generateTrack` in `api.ts`) polls `GET /jobs/<jobId>` every second for `{status, stage, done, total, skipped}` and `GenerateProgress.tsx` renders it. Jobs live in memory (`JOBS` in `server.py`), so a backend restart loses running jobs.
 1. Download all songs in parallel. Only YouTube URLs are accepted (`is_valid_youtube_url`). Full audio is cached by `ensure_cached` as `cache/<videoId>.full.m4a` (per-video locks, atomic writes, mtime refreshed on use), then trimmed to 60s.
 2. Process every item in parallel: re-encode songs and decode uploaded snippets with two-pass `loudnorm` (`loudnorm_filter`; songs to `SONG_LUFS`, snippets to `SNIPPET_LUFS`), and copy effects into the job temp dir untouched, so airhorns and the hardbass edit keep their level.
 3. Normalize to 44.1kHz stereo 192k MP3 and concat into `output/club100_<uuid>.mp3`.
 
-Failed items are logged and **skipped silently**, so a generated track can be missing songs without the request failing. Output files are pruned after 1h and cache files after `CACHE_MAX_AGE_HOURS` without use.
+Failed items are logged and skipped without failing the job; their labels are reported in the job's `skipped` list and shown under the download link. Output files are pruned after 1h and cache files after `CACHE_MAX_AGE_HOURS` without use.
 
 All yt-dlp invocations must go through `YTDLP` in `main.py` (`--js-runtimes node --no-playlist`) and pass a timeout. User-supplied search text goes after `--` so it can't be parsed as a flag.
 

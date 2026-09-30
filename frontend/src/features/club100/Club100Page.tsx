@@ -2,6 +2,7 @@ import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
 import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
 import { GenerateButton } from './GenerateButton';
+import { GenerateProgress } from './GenerateProgress';
 import { SongSearch } from './SongSearch';
 import {
   addSong,
@@ -36,6 +37,7 @@ export const Club100Page: React.FC = () => {
     return '';
   });
   const [job, setJob] = useState<Club100Job | null>(null);
+  const [progress, setProgress] = useState<Club100Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,15 +85,17 @@ export const Club100Page: React.FC = () => {
     setLoading(true);
     setError(null);
     setJob(null);
+    setProgress({ jobId: '', status: 'processing', stage: 'upload', done: 0, total: 0, skipped: [] });
     try {
       const autoEffect = effects.find(e => e.id === autoEffectId);
       const timeline = autoEffectId ? injectAutoEffect(trackItems, autoEffect) : trackItems;
-      const result = await generateTrack({ timeline });
+      const result = await generateTrack({ timeline }, setProgress);
       setJob(result);
     } catch (e: unknown) {
       setError((e as Error).message || 'Failed to generate track');
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -318,19 +322,21 @@ export const Club100Page: React.FC = () => {
         />
       </Suspense>
       <GenerateButton onClick={handleGenerate} loading={loading} />
-      {loading && (
-        <div style={{ marginTop: 16, textAlign: 'center' }}>
-          <div style={{ display: 'inline-block', width: 40, height: 40, border: '4px solid #000', borderRadius: '50%', borderTop: '4px solid #baffc9', animation: 'spin 1s linear infinite' }} />
-          <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-          <div style={{ fontWeight: 'bold', marginTop: 8 }}>Generating track...</div>
-        </div>
-      )}
+      {loading && progress && <GenerateProgress job={progress} />}
       {error && <div style={{ color: 'red', marginTop: 12 }}>{error}</div>}
       {job && (
         <div style={{ marginTop: 24, padding: 16, border: '2px solid black', borderRadius: 8, background: '#e6ffe6' }}>
           <div style={{ fontWeight: 'bold', marginBottom: 8 }}>Track Status: {job.status}</div>
           {job.downloadUrl && (
             <a href={job.downloadUrl} download style={{ fontSize: 18, color: '#007700', fontWeight: 'bold' }}>Download MP3</a>
+          )}
+          {job.skipped.length > 0 && (
+            <div style={{ marginTop: 12, color: '#b00' }}>
+              <div style={{ fontWeight: 'bold' }}>Left out of the track ({job.skipped.length}):</div>
+              <ul style={{ margin: '4px 0 0 20px' }}>
+                {job.skipped.map((label, i) => <li key={i}>{label}</li>)}
+              </ul>
+            </div>
           )}
         </div>
       )}

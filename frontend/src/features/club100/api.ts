@@ -1,19 +1,30 @@
 import { Club100Job, Song, TrackItem, Effect } from './types';
 import { BACKEND_URL } from './config';
 
-export async function generateTrack(payload: { timeline: TrackItem[] }): Promise<Club100Job> {
+/**
+ * Start a generation job and poll `/jobs/<id>` until it finishes, reporting
+ * progress through `onProgress`. Resolves with the finished job.
+ */
+export async function generateTrack(
+  payload: { timeline: TrackItem[] },
+  onProgress?: (job: Club100Job) => void,
+): Promise<Club100Job> {
   const res = await fetch(`${BACKEND_URL}/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error('Failed to start generation');
-  const data = await res.json();
-  return {
-    jobId: data.jobId,
-    status: 'done', // Python backend is synchronous for now
-    downloadUrl: `${BACKEND_URL}/download/${data.jobId}`,
-  };
+  if (!res.ok) throw new Error(`Failed to start generation (${res.status} ${res.statusText})`);
+  const { jobId } = await res.json();
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const poll = await fetch(`${BACKEND_URL}/jobs/${jobId}`);
+    if (!poll.ok) throw new Error(`Lost track of generation job (${poll.status})`);
+    const job: Club100Job = await poll.json();
+    if (job.status === 'error') throw new Error(job.error || 'Generation failed');
+    if (job.status === 'done') return { ...job, downloadUrl: getDownloadUrl(jobId) };
+    onProgress?.(job);
+  }
 }
 
 export function getDownloadUrl(jobId: string): string {
