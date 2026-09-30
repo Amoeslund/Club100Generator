@@ -7,6 +7,7 @@ export const SongSearch: React.FC<{
 }> = ({ onAdd }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Song[]>([]);
+  const [added, setAdded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,8 +16,7 @@ export const SongSearch: React.FC<{
     setLoading(true);
     setError(null);
     try {
-      const res = await youtubeSearch(query);
-      setResults(res);
+      setResults(await youtubeSearch(query));
     } catch (e: unknown) {
       setError((e as Error).message || 'Search failed');
     } finally {
@@ -25,30 +25,30 @@ export const SongSearch: React.FC<{
   };
 
   return (
-    <div style={{ border: '3px solid black', padding: 12, marginBottom: 16, background: '#f0e6ff', borderRadius: 8 }}>
-      <form onSubmit={handleSearch} style={{ display: 'flex', marginBottom: 8 }}>
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search YouTube for songs..."
-          style={{ flex: 1, fontSize: 16, border: '2px solid black', borderRadius: 4, padding: 4, marginRight: 8 }}
-        />
-        <button type="submit" style={{ fontWeight: 'bold', border: '2px solid black', borderRadius: 4, background: '#baffc9', padding: '4px 16px' }} disabled={loading}>
-          {loading ? 'Searching...' : 'Search'}
+    <div className="c100-stack">
+      <form onSubmit={handleSearch} className="c100-inline">
+        <input className="c100-input" value={query} onChange={e => setQuery(e.target.value)} placeholder="Artist or song title" aria-label="Search YouTube" />
+        <button type="submit" className="c100-btn c100-btn-primary" disabled={loading || !query.trim()}>
+          {loading ? 'Searching…' : 'Search YouTube'}
         </button>
       </form>
-      {error && <div style={{ color: 'red', marginBottom: 8 }}>{error}</div>}
+      {error && <div className="c100-error">{error}</div>}
       {results.length > 0 && (
-        <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #aaa', borderRadius: 4, background: '#fff' }}>
-          {results.map((song, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', padding: 6, borderBottom: '1px solid #eee' }}>
-              {song.thumbnail && <img src={song.thumbnail} alt="thumb" style={{ width: 40, height: 40, marginRight: 8, borderRadius: 4, border: '1px solid #ccc' }} />}
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 'bold' }}>{song.title}</div>
-                <div style={{ fontSize: 13, color: '#666' }}>{song.artist}</div>
+        <div className="c100-results">
+          {results.map(song => (
+            <div key={song.url} className="c100-result">
+              {/* eslint-disable-next-line @next/next/no-img-element -- YouTube thumbnails, local app */}
+              {song.thumbnail && <img src={song.thumbnail} alt="" />}
+              <div className="c100-result-title" title={song.title}>
+                {song.title}
+                {song.artist && <div className="c100-muted">{song.artist}</div>}
               </div>
-              <button onClick={() => onAdd(song)} style={{ marginLeft: 8, fontWeight: 'bold', border: '2px solid black', borderRadius: 4, background: '#ffd6a5', padding: '4px 12px' }}>
-                + Add
+              <button
+                type="button"
+                className="c100-btn"
+                onClick={() => { onAdd(song); setAdded(prev => new Set(prev).add(song.url)); }}
+              >
+                {added.has(song.url) ? 'Added' : 'Add'}
               </button>
             </div>
           ))}
@@ -56,4 +56,4 @@ export const SongSearch: React.FC<{
       )}
     </div>
   );
-}; 
+};

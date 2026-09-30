@@ -14,6 +14,9 @@ export type ClipState = {
 
 // Parallel /clips requests. The backend encodes on all cores; this just keeps the queue flowing.
 const CONCURRENCY = 6;
+// Network failures (backend restarting or not started yet) are retried with a growing delay.
+const NETWORK_RETRIES = 8;
+const RETRY_DELAY_MS = 1500;
 
 /**
  * Prepare the finished clip for every timeline item as soon as it is added or changed.
@@ -27,6 +30,7 @@ export function useClips(items: TrackItem[], onPinStart: (id: string, start: num
   const requested = useRef(new Map<string, string>()); // item id -> clipKey already queued/built
   const queue = useRef<TrackItem[]>([]);
   const active = useRef(0);
+  const attempts = useRef(new Map<string, number>());
   const pinStart = useRef(onPinStart);
   pinStart.current = onPinStart;
 
@@ -45,12 +49,26 @@ export function useClips(items: TrackItem[], onPinStart: (id: string, start: num
             requested.current.set(item.id, doneKey);
             pinStart.current(item.id, res.start);
           }
+          attempts.current.delete(item.id);
           if (wanted.current.get(item.id) !== doneKey) return;
           setClips(c => ({ ...c, [item.id]: { key: doneKey, status: 'ready', clipId: res.clipId, duration: res.duration } }));
         })
         .catch((e: Error) => {
           if (wanted.current.get(item.id) !== key) return;
-          setClips(c => ({ ...c, [item.id]: { key, status: 'error', error: e.message } }));
+          const tries = (attempts.current.get(item.id) ?? 0) + 1;
+          // fetch() rejects with a TypeError only when the backend can't be reached at all.
+          if (e instanceof TypeError && tries <= NETWORK_RETRIES) {
+            attempts.current.set(item.id, tries);
+            setTimeout(() => {
+              if (wanted.current.get(item.id) !== key) return;
+              queue.current.push(item);
+              pump();
+            }, RETRY_DELAY_MS * tries);
+            return;
+          }
+          attempts.current.delete(item.id);
+          const error = e instanceof TypeError ? 'The backend is not reachable. Is it running?' : e.message;
+          setClips(c => ({ ...c, [item.id]: { key, status: 'error', error } }));
         })
         .finally(() => {
           active.current--;

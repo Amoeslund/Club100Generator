@@ -120,3 +120,18 @@ export async function findBestStart(url: string): Promise<{ start: number; metho
 export function getEffectAudioUrl(effect: Effect): string {
   return `${BACKEND_URL}${effect.audioUrl}`;
 }
+
+export type SongPeaks = { duration: number; bucketsPerSecond: number; peaks: number[] };
+
+/** Full downloaded audio of a song, for picking start/end in the song editor. */
+export function getSongAudioUrl(videoId: string): string {
+  return `${BACKEND_URL}/songs/${videoId}/audio`;
+}
+
+/** Waveform overview of a song (downloads it into the backend cache first if needed). */
+export async function fetchSongPeaks(videoId: string): Promise<SongPeaks> {
+  const res = await fetch(`${BACKEND_URL}/songs/${videoId}/peaks`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Could not load the song (${res.status})`);
+  return data;
+}

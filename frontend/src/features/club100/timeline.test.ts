@@ -187,6 +187,9 @@ describe('clip helpers', () => {
     expect(clipKey(song)).not.toBe(clipKey(songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 11 })));
     expect(clipKey(snip)).not.toBe(clipKey(snippetItem({ type: 'upload', audioUrl: 'data:audio/wav;base64,AAAB' })));
     expect(clipKey(fx)).toBe('effect|airhorn');
+    // Songs without an end keep the key format they had before `end` existed.
+    expect(clipKey(song)).toBe('song|https://youtu.be/aaaaaaaaaaa|10');
+    expect(clipKey(songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 10, end: 40 }))).toBe('song|https://youtu.be/aaaaaaaaaaa|10|40');
   });
 
   it('buildSegments skips unready clips and locate finds offsets', () => {
@@ -195,7 +198,14 @@ describe('clip helpers', () => {
       [snip.id]: { status: 'pending' },
       [fx.id]: { status: 'ready', clipId: 'fx.mp3', duration: 3 },
     });
-    expect(segs.map(s => [s.id, s.start])).toEqual([[song.id, 0], [fx.id, 60]]);
+    expect(segs.map(s => [s.itemId, s.start])).toEqual([[song.id, 0], [fx.id, 60]]);
+    const withAfter = buildSegments([song, fx], {
+      [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 },
+      [fx.id]: { status: 'ready', clipId: 'fx.mp3', duration: 3 },
+    }, { status: 'ready', clipId: 'horn.mp3', duration: 2 });
+    expect(withAfter.map(s => [s.id, s.itemId, s.start])).toEqual([
+      [song.id, song.id, 0], [`${song.id}:after`, song.id, 60], [fx.id, fx.id, 62],
+    ]);
     expect(locate(segs, 61.5)).toEqual({ index: 1, offset: 1.5 });
     expect(locate(segs, 999)).toEqual({ index: 1, offset: 3 });
     expect(locate([], 0)).toBeNull();
@@ -215,6 +225,9 @@ describe('sections and start times', () => {
     expect(parseTimeInput('  ')).toBeUndefined();
     expect(parseTimeInput('abc')).toBeNull();
     expect(parseTimeInput('1:2:3:4')).toBeNull();
+    expect(parseTimeInput('1:26.5')).toBe(86.5);
+    expect(formatTime(86.5, true)).toBe('1:26.5');
+    expect(formatTime(86, true)).toBe('1:26');
   });
 
   it('sections are dropped from the audio timeline and skipped by the player', () => {
@@ -222,7 +235,7 @@ describe('sections and start times', () => {
     const song = songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 0 });
     expect(audioTimeline([intro, song])).toEqual([song]);
     expect(buildSegments([intro, song], { [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 } }))
-      .toEqual([{ id: song.id, clipId: 'a.mp3', start: 0, duration: 60 }]);
+      .toEqual([{ id: song.id, itemId: song.id, clipId: 'a.mp3', start: 0, duration: 60 }]);
     expect(sectionAt([intro, song], 1)).toBe('Intro');
     expect(sectionAt([song, intro], 0)).toBeNull();
     expect(songNumberAt([intro, song], 1)).toBe(1);

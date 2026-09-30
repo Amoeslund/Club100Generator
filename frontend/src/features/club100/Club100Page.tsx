@@ -1,28 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState, Suspense, lazy } from 'react';
-import { Song, Snippet, Club100Job, TrackItem, Effect } from './types';
+import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react';
+import { Song, Club100Job, TrackItem, Effect } from './types';
 import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
-import { GenerateButton } from './GenerateButton';
 import { GenerateProgress } from './GenerateProgress';
 import { SongSearch } from './SongSearch';
-import {
-  addSong,
-  insertAfter,
-  removeAt,
-  moveItem,
-  updateAt,
-  injectAutoEffect,
-  ensureIds,
-  songItem,
-  snippetItem,
-  effectItem,
-  parseImportLine,
-  audioTimeline,
-} from './timeline';
+import { addSong, injectAutoEffect, ensureIds, songItem, parseImportLine, audioTimeline } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
 import { BackupControls } from './BackupControls';
-import './club100.css';
 import { TimelinePlayer, TimelinePlayerHandle } from './TimelinePlayer';
+import './club100.css';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
 const DEMO_SONGS: Song[] = [
@@ -30,21 +16,39 @@ const DEMO_SONGS: Song[] = [
   { url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Rick Astley - Never Gonna Give You Up' },
 ];
 
+// Clip-cache id for the "effect after every song" setting (not a timeline item).
+const AFTER_SONG_ID = '__after-song';
+
+function usePersistentString(key: string): [string, (v: string) => void] {
+  const [value, setValue] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem(key) || '' : ''));
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // A convenience setting; ignore quota errors.
+    }
+  }, [key, value]);
+  return [value, setValue];
+}
+
 export const Club100Page: React.FC = () => {
   const [trackItems, setTrackItems] = useState<TrackItem[]>([]);
   // Don't persist until the saved timeline has been loaded, or we'd overwrite it with [].
   const [timelineLoaded, setTimelineLoaded] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [importText, setImportText] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('club100_importText') || '';
-    }
-    return '';
-  });
+  const [importText, setImportText] = usePersistentString('club100_importText');
+  const [autoEffectId, setAutoEffectId] = usePersistentString('club100_autoEffectId');
   const [job, setJob] = useState<Club100Job | null>(null);
   const [progress, setProgress] = useState<Club100Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Effects
+  const [effects, setEffects] = useState<Effect[]>([]);
+  useEffect(() => {
+    getEffects().then(setEffects).catch(() => setEffects([]));
+  }, []);
+  const autoEffect = effects.find(e => e.id === autoEffectId);
 
   // Clips are prepared in the background as soon as items are added or edited. A random song start
   // chosen by the backend is pinned into the item so preview and generated track match.
@@ -52,10 +56,23 @@ export const Club100Page: React.FC = () => {
     setTrackItems(prev => prev.map(it =>
       it.id === id && it.type === 'song' && it.song.start === undefined ? { ...it, song: { ...it.song, start } } : it));
   }, []);
-  const { clips, retry: retryClip } = useClips(trackItems, pinStart);
+  const clipItems = useMemo<TrackItem[]>(
+    () => (autoEffect ? [...trackItems, { id: AFTER_SONG_ID, type: 'effect', effect: autoEffect }] : trackItems),
+    [trackItems, autoEffect],
+  );
+  const { clips, retry: retryClip } = useClips(clipItems, pinStart);
   const playerRef = useRef<TimelinePlayerHandle>(null);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const handlePlayItem = useCallback((id: string) => playerRef.current?.playItem(id), []);
+
+  // Only one thing plays at a time: the track player, a song editor or a recording preview.
+  useEffect(() => {
+    const onPlay = (e: Event) => {
+      document.querySelectorAll('audio').forEach(a => { if (a !== e.target && !a.paused) a.pause(); });
+    };
+    document.addEventListener('play', onPlay, true);
+    return () => document.removeEventListener('play', onPlay, true);
+  }, []);
 
   // Load the saved timeline once; seed demo songs if there is none.
   useEffect(() => {
@@ -77,25 +94,11 @@ export const Club100Page: React.FC = () => {
       .then(() => setSaveError(null))
       .catch(err => {
         console.error('Failed to save timeline', err);
-        setSaveError('Could not save the timeline in this browser. Your changes are only kept until you close or reload the page.');
+        setSaveError('Could not save the running order in this browser. Changes are only kept until you close or reload the page, so use Export timeline now.');
       });
   }, [trackItems, timelineLoaded]);
-  useEffect(() => {
-    try {
-      localStorage.setItem('club100_importText', importText);
-    } catch {
-      // Draft import text is a convenience; ignore quota errors.
-    }
-  }, [importText]);
 
   const handleAddSong = (song: Song) => setTrackItems(prev => addSong(prev, song));
-  const handleAddSnippet = (snippet: Snippet, idx: number) =>
-    setTrackItems(prev => insertAfter(prev, snippetItem(snippet), idx));
-  const handleAddEffect = (effect: Effect, idx: number) =>
-    setTrackItems(prev => insertAfter(prev, effectItem(effect), idx));
-  const handleUpdateItem = (idx: number, item: TrackItem) => setTrackItems(prev => updateAt(prev, idx, item));
-  const handleRemoveItem = (idx: number) => setTrackItems(prev => removeAt(prev, idx));
-  const handleMoveItem = (from: number, to: number) => setTrackItems(prev => moveItem(prev, from, to));
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -103,11 +106,9 @@ export const Club100Page: React.FC = () => {
     setJob(null);
     setProgress({ jobId: '', status: 'processing', stage: 'upload', done: 0, total: 0, skipped: [] });
     try {
-      const autoEffect = effects.find(e => e.id === autoEffectId);
       const audio = audioTimeline(trackItems);
-      const timeline = autoEffectId ? injectAutoEffect(audio, autoEffect) : audio;
-      const result = await generateTrack({ timeline }, setProgress);
-      setJob(result);
+      const timeline = autoEffect ? injectAutoEffect(audio, autoEffect) : audio;
+      setJob(await generateTrack({ timeline }, setProgress));
     } catch (e: unknown) {
       setError((e as Error).message || 'Failed to generate track');
     } finally {
@@ -116,7 +117,7 @@ export const Club100Page: React.FC = () => {
     }
   };
 
-  // Mass import logic (add as songs at end)
+  // Mass import (adds songs at the end)
   const [importLoading, setImportLoading] = useState(false);
   const [importResult, setImportResult] = useState<{ found: string[]; notFound: string[] } | null>(null);
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
@@ -171,14 +172,6 @@ export const Club100Page: React.FC = () => {
     setImportProgress(null);
   };
 
-  // Effects
-  const [effects, setEffects] = useState<Effect[]>([]);
-  useEffect(() => {
-    getEffects().then(setEffects).catch(() => setEffects([]));
-  }, []);
-  const [addEffectIdx, setAddEffectIdx] = useState<number | null>(null);
-  const [selectedEffectId, setSelectedEffectId] = useState<string>('');
-
   // Import effect from myinstants.com
   const [instantUrl, setInstantUrl] = useState('');
   const [instantStatus, setInstantStatus] = useState<string | null>(null);
@@ -189,7 +182,7 @@ export const Club100Page: React.FC = () => {
     try {
       const effect = await importMyInstantsEffect(instantUrl.trim());
       setEffects(prev => (prev.some(e => e.id === effect.id) ? prev : [...prev, effect]));
-      setInstantStatus(`Imported "${effect.name}"`);
+      setInstantStatus(`Added "${effect.name}" to your sound effects`);
       setInstantUrl('');
     } catch (err) {
       setInstantStatus(err instanceof Error ? err.message : 'Import failed');
@@ -197,14 +190,15 @@ export const Club100Page: React.FC = () => {
     setInstantLoading(false);
   };
 
-  // Auto-find the best 60s of every song that has no start time yet
+  // Find the best 60s of every song that has no start time yet
   const [autoStartProgress, setAutoStartProgress] = useState<{ current: number; total: number; failed: number } | null>(null);
+  const songsWithoutStart = trackItems.filter(it => it.type === 'song' && it.song.start === undefined).length;
   const handleAutoStart = async () => {
     const pending = trackItems.flatMap(item =>
       item.type === 'song' && item.song.start === undefined ? [{ id: item.id, url: item.song.url }] : [],
     );
-    const progress = { current: 0, total: pending.length, failed: 0 };
-    setAutoStartProgress({ ...progress });
+    const state = { current: 0, total: pending.length, failed: 0 };
+    setAutoStartProgress({ ...state });
     let next = 0;
     const worker = async () => {
       while (next < pending.length) {
@@ -215,156 +209,158 @@ export const Club100Page: React.FC = () => {
             it.id === id && it.type === 'song' ? { ...it, song: { ...it.song, start } } : it,
           ));
         } catch {
-          progress.failed++;
+          state.failed++;
         }
-        progress.current++;
-        setAutoStartProgress({ ...progress });
+        state.current++;
+        setAutoStartProgress({ ...state });
       }
     };
     await Promise.all(Array.from({ length: 4 }, worker));
   };
 
-  // Auto effect after each song
-  const [autoEffectId, setAutoEffectId] = useState<string>('');
+  const [addTab, setAddTab] = useState<'search' | 'list' | 'effects'>('search');
+  // Open the add panel once for an empty running order; afterwards it stays how the user left it.
+  const [addOpen, setAddOpen] = useState(false);
+  const openedForEmpty = useRef(false);
+  useEffect(() => {
+    if (timelineLoaded && !openedForEmpty.current) {
+      openedForEmpty.current = true;
+      if (trackItems.length === 0) setAddOpen(true);
+    }
+  }, [timelineLoaded, trackItems.length]);
+  const addTabs: [typeof addTab, string][] = [['search', 'Search YouTube'], ['list', 'Paste a list'], ['effects', 'Sound effects']];
 
   return (
-    <div style={{ maxWidth: 600, margin: '40px auto 140px', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
-      <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} onActiveChange={setActiveItemId} />
-      <h1 style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 16 }}>Club 100 Generator</h1>
-      <div className="c100" style={{ minHeight: 0, background: 'none', marginBottom: 16 }}>
-        <BackupControls items={trackItems} onReplace={setTrackItems} />
-      </div>
-      {saveError && (
-        <div style={{ border: '3px solid #c00', borderRadius: 8, background: '#ffe3e3', padding: 12, marginBottom: 16, fontWeight: 'bold' }}>{saveError}</div>
-      )}
-      <SongSearch onAdd={handleAddSong} />
-      {/* Auto effect after each song */}
-      <div style={{ border: '3px solid #000', borderRadius: 8, background: '#fffbe6', padding: 12, marginBottom: 16 }}>
-        <label style={{ fontWeight: 'bold', marginRight: 8 }}>Effect to play after each song:</label>
-        <select
-          value={autoEffectId}
-          onChange={e => setAutoEffectId(e.target.value)}
-          style={{ fontSize: 16, border: '2px solid #000', borderRadius: 4, padding: 4 }}
-        >
-          <option value="">None</option>
-          {effects.map(effect => (
-            <option key={effect.id} value={effect.id}>{effect.name}</option>
-          ))}
-        </select>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <input
-            value={instantUrl}
-            onChange={e => setInstantUrl(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && instantUrl.trim()) handleImportInstant(); }}
-            placeholder="Paste myinstants.com link to import effect"
-            style={{ flex: 1, fontSize: 15, border: '2px solid #000', borderRadius: 4, padding: 4 }}
-          />
-          <button
-            onClick={handleImportInstant}
-            disabled={!instantUrl.trim() || instantLoading}
-            style={{ fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#a5d8ff', boxShadow: '2px 2px 0 #000', padding: '2px 10px' }}
-          >
-            {instantLoading ? 'Importing...' : 'Import'}
-          </button>
-        </div>
-        {instantStatus && <div style={{ marginTop: 6, fontSize: 14 }}>{instantStatus}</div>}
-      </div>
-      {/* Mass import UI */}
-      <div style={{ border: '3px solid black', padding: 12, marginBottom: 16, background: '#e6f7ff', borderRadius: 8 }}>
-        <div style={{ fontWeight: 'bold', marginBottom: 6 }}>Mass Import Songs</div>
-        <textarea
-          value={importText}
-          onChange={e => setImportText(e.target.value)}
-          placeholder={"Paste either YouTube URLs or song names, one per line. Optionally add a title after a comma or tab.\nExample:\nhttps://youtu.be/abc123, My Song Title"}
-          rows={4}
-          style={{ width: '100%', fontSize: 15, border: '2px solid black', borderRadius: 4, marginBottom: 8, padding: 6 }}
-        />
-        <button
-          onClick={handleMassImport}
-          style={{ fontWeight: 'bold', border: '2px solid black', borderRadius: 4, background: '#baffc9', padding: '4px 16px' }}
-          disabled={!importText.trim() || importLoading}
-        >
-          {importLoading ? 'Importing...' : 'Import Songs'}
-        </button>
-        {importProgress && (
-          <div style={{ marginTop: 8, color: '#333', fontWeight: 'bold' }}>
-            Importing: {importProgress.current} / {importProgress.total}
-            <div style={{ height: 8, background: '#eee', borderRadius: 4, marginTop: 4, width: '100%' }}>
-              <div style={{ height: 8, background: '#baffc9', borderRadius: 4, width: `${importProgress.total ? (importProgress.current / importProgress.total) * 100 : 0}%`, transition: 'width 0.2s' }} />
-            </div>
-          </div>
-        )}
-        {importResult && (
-          <div style={{ marginTop: 8 }}>
-            {importResult.found.length > 0 && (
-              <div style={{ color: 'green', fontSize: 15, marginBottom: 4 }}>
-                <b>Found:</b> {importResult.found.join(', ')}
+    <div className="c100">
+      <div className="c100-page">
+        <header className="c100-header">
+          <h1 className="c100-title">Club 100 Generator</h1>
+          <BackupControls items={trackItems} onReplace={setTrackItems} />
+        </header>
+        {saveError && <div className="c100-banner" role="alert">{saveError}</div>}
+
+        <div className="c100-layout">
+          <main>
+            <details className="c100-add" open={addOpen} onToggle={e => setAddOpen(e.currentTarget.open)}>
+              <summary>Add songs and sound effects</summary>
+              <div className="c100-add-body">
+                <div className="c100-tabs" role="tablist">
+                  {addTabs.map(([k, label]) => (
+                    <button key={k} type="button" role="tab" className="c100-tab" aria-selected={addTab === k} onClick={() => setAddTab(k)}>{label}</button>
+                  ))}
+                </div>
+
+                {addTab === 'search' && <SongSearch onAdd={handleAddSong} />}
+
+                {addTab === 'list' && (
+                  <div className="c100-stack">
+                    <textarea
+                      className="c100-textarea"
+                      value={importText}
+                      onChange={e => setImportText(e.target.value)}
+                      placeholder={'One song per line: a YouTube link (a ?t= start is kept, a title can follow after a tab or comma) or a song to search for.\nhttps://youtu.be/dQw4w9WgXcQ?t=43, Rick Astley - Never Gonna Give You Up\nDarude Sandstorm'}
+                      rows={6}
+                    />
+                    <div className="c100-inline">
+                      <button type="button" className="c100-btn c100-btn-primary" onClick={handleMassImport} disabled={!importText.trim() || importLoading}>
+                        {importLoading ? 'Adding…' : 'Add songs to the end'}
+                      </button>
+                      {importProgress && <span className="c100-muted">{importProgress.current} of {importProgress.total}</span>}
+                    </div>
+                    {importProgress && (
+                      <div className="c100-meter"><div style={{ width: `${importProgress.total ? (importProgress.current / importProgress.total) * 100 : 0}%` }} /></div>
+                    )}
+                    {importResult && (
+                      <div className="c100-muted">
+                        Added {importResult.found.length} {importResult.found.length === 1 ? 'song' : 'songs'}.
+                        {importResult.notFound.length > 0 && <span className="c100-error"> Not found: {importResult.notFound.join(', ')}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {addTab === 'effects' && (
+                  <div className="c100-stack">
+                    <div className="c100-inline">
+                      <input
+                        className="c100-input"
+                        value={instantUrl}
+                        onChange={e => setInstantUrl(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter' && instantUrl.trim()) handleImportInstant(); }}
+                        placeholder="Link to a sound on myinstants.com"
+                        aria-label="myinstants.com link"
+                      />
+                      <button type="button" className="c100-btn c100-btn-primary" onClick={handleImportInstant} disabled={!instantUrl.trim() || instantLoading}>
+                        {instantLoading ? 'Importing…' : 'Import sound'}
+                      </button>
+                    </div>
+                    {instantStatus && <div className="c100-muted">{instantStatus}</div>}
+                    <div className="c100-muted">
+                      {effects.length} sound effects available. Place one with the + on a row, or play one after every song (right).
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-            {importResult.notFound.length > 0 && (
-              <div style={{ color: 'red', fontSize: 15 }}>
-                <b>Not found:</b> {importResult.notFound.join(', ')}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-      {/* Auto start times */}
-      <div style={{ border: '3px solid black', padding: 12, marginBottom: 16, background: '#f0fff0', borderRadius: 8 }}>
-        <button
-          onClick={handleAutoStart}
-          disabled={!!autoStartProgress && autoStartProgress.current < autoStartProgress.total}
-          style={{ fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#b2f2bb', boxShadow: '2px 2px 0 #000', padding: '2px 10px' }}
-        >
-          Auto-find best minute for songs without start time
-        </button>
-        {autoStartProgress && (
-          <div style={{ marginTop: 6, fontSize: 14 }}>
-            {autoStartProgress.current}/{autoStartProgress.total} done
-            {autoStartProgress.failed > 0 && ` (${autoStartProgress.failed} failed)`}
-          </div>
-        )}
-      </div>
-      <Suspense fallback={<div>Loading timeline...</div>}>
-        <TrackTimeline
-          items={trackItems}
-          onUpdateItem={handleUpdateItem}
-          onRemoveItem={handleRemoveItem}
-          onMoveItem={handleMoveItem}
-          onAddSong={handleAddSong}
-          onAddSnippet={handleAddSnippet}
-          onAddEffect={handleAddEffect}
-          effects={effects}
-          addEffectIdx={addEffectIdx}
-          setAddEffectIdx={setAddEffectIdx}
-          selectedEffectId={selectedEffectId}
-          setSelectedEffectId={setSelectedEffectId}
-          onClearTimeline={() => setTrackItems([])}
-          clips={clips}
-          activeItemId={activeItemId}
-          onPlayItem={handlePlayItem}
-          onRetryClip={retryClip}
-        />
-      </Suspense>
-      <GenerateButton onClick={handleGenerate} loading={loading} />
-      {loading && progress && <GenerateProgress job={progress} />}
-      {error && <div style={{ color: 'red', marginTop: 12 }}>{error}</div>}
-      {job && (
-        <div style={{ marginTop: 24, padding: 16, border: '2px solid black', borderRadius: 8, background: '#e6ffe6' }}>
-          <div style={{ fontWeight: 'bold', marginBottom: 8 }}>Track Status: {job.status}</div>
-          {job.downloadUrl && (
-            <a href={job.downloadUrl} download style={{ fontSize: 18, color: '#007700', fontWeight: 'bold' }}>Download MP3</a>
-          )}
-          {job.skipped.length > 0 && (
-            <div style={{ marginTop: 12, color: '#b00' }}>
-              <div style={{ fontWeight: 'bold' }}>Left out of the track ({job.skipped.length}):</div>
-              <ul style={{ margin: '4px 0 0 20px' }}>
-                {job.skipped.map((label, i) => <li key={i}>{label}</li>)}
-              </ul>
+            </details>
+
+            <Suspense fallback={<div className="c100-muted">Loading the running order…</div>}>
+              <TrackTimeline
+                items={trackItems}
+                onChange={setTrackItems}
+                effects={effects}
+                clips={clips}
+                activeItemId={activeItemId}
+                onPlayItem={handlePlayItem}
+                onRetryClip={retryClip}
+                headerExtra={songsWithoutStart > 0 && (
+                  <button
+                    type="button"
+                    className="c100-btn"
+                    onClick={handleAutoStart}
+                    disabled={!!autoStartProgress && autoStartProgress.current < autoStartProgress.total}
+                  >
+                    {autoStartProgress && autoStartProgress.current < autoStartProgress.total
+                      ? `Finding best minutes ${autoStartProgress.current} of ${autoStartProgress.total}`
+                      : `Find the best minute for ${songsWithoutStart} ${songsWithoutStart === 1 ? 'song' : 'songs'}`}
+                  </button>
+                )}
+              />
+            </Suspense>
+          </main>
+
+          <aside className="c100-side" aria-label="Player and export">
+            <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} afterSong={autoEffect ? clips[AFTER_SONG_ID] : undefined} onActiveChange={setActiveItemId} />
+
+            <div className="c100-panel c100-stack">
+              <label className="c100-stack" style={{ gap: 4 }}>
+                <span style={{ fontWeight: 600 }}>After every song</span>
+                <select className="c100-select" value={autoEffectId} onChange={e => setAutoEffectId(e.target.value)}>
+                  <option value="">Nothing</option>
+                  {effects.map(effect => <option key={effect.id} value={effect.id}>{effect.name}</option>)}
+                </select>
+              </label>
+              <button type="button" className="c100-btn c100-btn-primary c100-generate" onClick={handleGenerate} disabled={loading || trackItems.length === 0}>
+                {loading ? 'Making the MP3…' : 'Make the MP3'}
+              </button>
+              {loading && progress && <GenerateProgress job={progress} />}
+              {error && <div className="c100-error" role="alert">{error}</div>}
+              {job && (
+                <div>
+                  <a className="c100-download" href={job.downloadUrl} download>Download MP3</a>
+                  {job.skipped.length > 0 && (
+                    <>
+                      <div className="c100-error" style={{ marginTop: 10, fontWeight: 600 }}>
+                        Left out of the MP3 ({job.skipped.length}):
+                      </div>
+                      <ul className="c100-skipped">{job.skipped.map((label, i) => <li key={i}>{label}</li>)}</ul>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
-          )}
+          </aside>
         </div>
-      )}
+      </div>
     </div>
   );
 };

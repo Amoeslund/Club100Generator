@@ -164,26 +164,36 @@ function hashString(s: string): string {
 /** Identity of the audio an item produces: a changed key means its clip must be rebuilt. */
 export function clipKey(item: TrackItem): string {
   if (item.type === 'section') return 'section';
-  if (item.type === 'song') return `song|${item.song.url}|${item.song.start ?? ''}`;
+  if (item.type === 'song') {
+    const end = item.song.end !== undefined ? `|${item.song.end}` : '';
+    return `song|${item.song.url}|${item.song.start ?? ''}${end}`;
+  }
   if (item.type === 'effect') return `effect|${item.effect.id}`;
   return `snippet|${hashString(item.snippet.audioUrl ?? '')}`;
 }
 
-export type Segment = { id: string; clipId: string; start: number; duration: number };
+/** One stretch of the previewed track. `itemId` is the timeline item it belongs to. */
+export type Segment = { id: string; itemId: string; clipId: string; start: number; duration: number };
 
-/** Lay the ready clips end to end in timeline order; items without a ready clip are left out. */
-export function buildSegments(
-  items: TrackItem[],
-  clips: Record<string, { status: string; clipId?: string; duration?: number } | undefined>,
-): Segment[] {
+type ClipLike = { status: string; clipId?: string; duration?: number } | undefined;
+
+/**
+ * Lay the ready clips end to end in timeline order, exactly as the generated track will sound.
+ * Items without a ready clip are left out. `afterSong` (the "effect after every song" clip) is
+ * inserted after each song, attributed to that song.
+ */
+export function buildSegments(items: TrackItem[], clips: Record<string, ClipLike>, afterSong?: ClipLike): Segment[] {
   const segments: Segment[] = [];
   let t = 0;
+  const push = (id: string, itemId: string, clip: ClipLike) => {
+    if (clip?.status !== 'ready' || !clip.clipId || !clip.duration) return;
+    segments.push({ id, itemId, clipId: clip.clipId, start: t, duration: clip.duration });
+    t += clip.duration;
+  };
   for (const item of items) {
     if (!isAudioItem(item)) continue;
-    const clip = clips[item.id];
-    if (clip?.status !== 'ready' || !clip.clipId || !clip.duration) continue;
-    segments.push({ id: item.id, clipId: clip.clipId, start: t, duration: clip.duration });
-    t += clip.duration;
+    push(item.id, item.id, clips[item.id]);
+    if (item.type === 'song' && afterSong && clips[item.id]?.status === 'ready') push(`${item.id}:after`, item.id, afterSong);
   }
   return segments;
 }
@@ -199,7 +209,13 @@ export function locate(segments: Segment[], t: number): { index: number; offset:
   return { index: last, offset: segments[last].duration };
 }
 
-export function formatTime(seconds: number): string {
+/** Seconds as m:ss (or h:mm:ss); `precise` adds tenths, e.g. 1:26.5. */
+export function formatTime(seconds: number, precise = false): string {
+  if (precise) {
+    const whole = Math.floor(seconds);
+    const tenth = Math.round((seconds - whole) * 10);
+    return tenth === 0 || tenth === 10 ? formatTime(Math.round(seconds)) : `${formatTime(whole)}.${tenth}`;
+  }
   const s = Math.max(0, Math.floor(seconds));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -211,6 +227,6 @@ export function formatTime(seconds: number): string {
 export function parseTimeInput(value: string): number | undefined | null {
   const v = value.trim();
   if (v === '') return undefined;
-  if (!/^\d+(:\d{1,2}){0,2}$/.test(v)) return null;
-  return v.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+  if (!/^\d+(:\d{1,2}){0,2}(\.\d)?$/.test(v)) return null;
+  return Math.round(v.split(':').reduce((total, part) => total * 60 + Number(part), 0) * 10) / 10;
 }

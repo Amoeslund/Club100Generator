@@ -4,13 +4,18 @@ export type Song = {
   artist?: string;
   duration?: number;
   thumbnail?: string;
+  /** Clip start in seconds (0.1s precision). Unset means a random start, pinned once chosen. */
   start?: number;
+  /** Optional clip end in seconds; shortens the clip (it is never longer than 60s). */
+  end?: number;
 };
 
 // Snippets are user-supplied audio (recorded or uploaded). TTS has been removed.
 export type Snippet = {
   type: 'upload';
   audioUrl?: string;
+  /** Optional name shown in the running order. */
+  label?: string;
 };
 
 export type Club100JobStage = 'upload' | 'queued' | 'download' | 'process' | 'concat' | 'done';
