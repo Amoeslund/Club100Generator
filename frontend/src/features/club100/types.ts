@@ -35,8 +35,16 @@ export type Effect = {
 
 // Every track item carries a stable `id` so React keys / drag-and-drop ids
 // track item identity rather than array position.
+// A section is an optional, user-added heading that groups the items after it (e.g. a theme).
+// It produces no audio and is never sent to the backend.
+export type Section = { title: string };
+
 export type TrackItem = { id: string } & (
   | { type: 'song'; song: Song }
   | { type: 'snippet'; snippet: Snippet }
   | { type: 'effect'; effect: Effect }
+  | { type: 'section'; section: Section }
 );
+
+/** Items that produce audio. */
+export type AudioItem = Exclude<TrackItem, { type: 'section' }>;

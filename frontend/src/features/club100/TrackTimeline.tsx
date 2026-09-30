@@ -350,6 +350,16 @@ const SortableTrackItem: React.FC<SortableTrackItemProps> = ({ item, i, songNumb
             </div>
           ) : item.type === 'effect' ? (
             <EffectTimelineItem effect={item.effect} onRemove={() => onRemoveItem(i)} />
+          ) : item.type === 'section' ? (
+            <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: 8 }}>
+              <input
+                defaultValue={item.section.title}
+                placeholder="Section title"
+                onBlur={e => { if (e.target.value !== item.section.title) onUpdateItem(i, { ...item, section: { title: e.target.value } }); }}
+                style={{ flex: 1, fontSize: 18, fontWeight: 'bold', border: 'none', background: 'transparent' }}
+              />
+              <button onClick={() => onRemoveItem(i)} style={{ color: 'red', fontWeight: 'bold', border: '2px solid #000', borderRadius: 4, background: '#fff', padding: '2px 8px', cursor: 'pointer' }}>✕</button>
+            </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
               <audio controls src={item.snippet.audioUrl || ''} style={{ marginRight: 8, height: 32, background: '#fff', flex: 1 }} />

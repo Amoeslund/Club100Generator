@@ -16,6 +16,7 @@ import {
   snippetItem,
   effectItem,
   parseImportLine,
+  audioTimeline,
 } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
@@ -103,7 +104,8 @@ export const Club100Page: React.FC = () => {
     setProgress({ jobId: '', status: 'processing', stage: 'upload', done: 0, total: 0, skipped: [] });
     try {
       const autoEffect = effects.find(e => e.id === autoEffectId);
-      const timeline = autoEffectId ? injectAutoEffect(trackItems, autoEffect) : trackItems;
+      const audio = audioTimeline(trackItems);
+      const timeline = autoEffectId ? injectAutoEffect(audio, autoEffect) : audio;
       const result = await generateTrack({ timeline }, setProgress);
       setJob(result);
     } catch (e: unknown) {

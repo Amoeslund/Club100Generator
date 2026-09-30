@@ -14,6 +14,10 @@ import {
   buildSegments,
   locate,
   formatTime,
+  parseTimeInput,
+  sectionItem,
+  audioTimeline,
+  sectionAt,
   songNumberAt,
   parseImportLine,
   parseStartParam,
@@ -200,5 +204,40 @@ describe('clip helpers', () => {
   it('formatTime', () => {
     expect(formatTime(65)).toBe('1:05');
     expect(formatTime(5942)).toBe('1:39:02');
+  });
+});
+
+describe('sections and start times', () => {
+  it('parseTimeInput accepts m:ss, h:mm:ss and seconds', () => {
+    expect(parseTimeInput('1:26')).toBe(86);
+    expect(parseTimeInput('86')).toBe(86);
+    expect(parseTimeInput('1:02:03')).toBe(3723);
+    expect(parseTimeInput('  ')).toBeUndefined();
+    expect(parseTimeInput('abc')).toBeNull();
+    expect(parseTimeInput('1:2:3:4')).toBeNull();
+  });
+
+  it('sections are dropped from the audio timeline and skipped by the player', () => {
+    const intro = sectionItem({ title: 'Intro' });
+    const song = songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 0 });
+    expect(audioTimeline([intro, song])).toEqual([song]);
+    expect(buildSegments([intro, song], { [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 } }))
+      .toEqual([{ id: song.id, clipId: 'a.mp3', start: 0, duration: 60 }]);
+    expect(sectionAt([intro, song], 1)).toBe('Intro');
+    expect(sectionAt([song, intro], 0)).toBeNull();
+    expect(songNumberAt([intro, song], 1)).toBe(1);
+  });
+
+  it('timelines saved before sections existed load unchanged', () => {
+    const saved = [
+      { id: 'a', type: 'song', song: { url: 'https://www.youtube.com/watch?v=_B0CyOAO8y0&t=11', title: 'Entry', start: 11 } },
+      { type: 'snippet', snippet: { type: 'upload', audioUrl: 'data:audio/wav;base64,AAAA' } },
+      { id: 'c', type: 'effect', effect: { id: 'mi_clown', name: 'Clown', audioUrl: '/effects/mi-clown.mp3' } },
+    ] as Partial<TrackItem>[];
+    const loaded = ensureIds(saved);
+    expect(loaded[0]).toBe(saved[0]);
+    expect(loaded[2]).toBe(saved[2]);
+    expect(loaded[1]).toMatchObject(saved[1]);
+    expect(audioTimeline(loaded)).toEqual(loaded);
   });
 });

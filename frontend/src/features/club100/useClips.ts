@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TrackItem } from './types';
 import { prepareClip } from './api';
-import { clipKey } from './timeline';
+import { clipKey, isAudioItem } from './timeline';
 
 export type ClipState = {
   /** clipKey of the item this state belongs to; a mismatch means the state is stale. */
@@ -60,7 +60,7 @@ export function useClips(items: TrackItem[], onPinStart: (id: string, start: num
   }, []);
 
   useEffect(() => {
-    const ids = new Set(items.map(it => it.id));
+    const ids = new Set(items.filter(isAudioItem).map(it => it.id));
     for (const id of [...wanted.current.keys()]) {
       if (!ids.has(id)) {
         wanted.current.delete(id);
@@ -69,6 +69,7 @@ export function useClips(items: TrackItem[], onPinStart: (id: string, start: num
     }
     const fresh: TrackItem[] = [];
     for (const item of items) {
+      if (!isAudioItem(item)) continue; // sections have no audio
       const key = clipKey(item);
       wanted.current.set(item.id, key);
       if (requested.current.get(item.id) !== key) {

@@ -180,6 +180,7 @@ class TestClipPipeline:
         monkeypatch.setitem(main.EFFECTS_MAP, 'tb', {'id': 'tb', 'audioUrl': '/effects/b.mp3'})
         seen = []
         out = main.process_audio({'timeline': [
+            {'type': 'section', 'section': {'title': 'Intro'}},
             {'type': 'effect', 'effect': {'id': 'ta'}},
             {'type': 'effect', 'effect': {'id': 'nope', 'name': 'Missing'}},
             {'type': 'effect', 'effect': {'id': 'tb'}},

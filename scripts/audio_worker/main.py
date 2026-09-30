@@ -467,7 +467,8 @@ def process_audio(data: dict, job_id: str | None = None, progress=None) -> str:
     `progress(stage, done, total, skipped)` is called as work completes, where
     stage is 'download', 'process' or 'concat' and skipped lists item labels.
     """
-    timeline = data.get("timeline", [])
+    # Sections are UI-only headings without audio; drop them before numbering anything.
+    timeline = [item for item in data.get("timeline", []) if item.get('type') != 'section']
     skipped: list[str] = []
 
     def report(stage, done, total):

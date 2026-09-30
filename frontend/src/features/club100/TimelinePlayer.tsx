@@ -6,7 +6,7 @@ import { buildSegments, formatTime, locate, songNumberAt } from './timeline';
 
 export type TimelinePlayerHandle = { playItem: (id: string) => void };
 
-const SEGMENT_COLORS: Record<TrackItem['type'], string> = { song: '#ffd166', snippet: '#ff8fd0', effect: '#74c0fc' };
+const SEGMENT_COLORS: Record<TrackItem['type'], string> = { song: '#ffd166', snippet: '#ff8fd0', effect: '#74c0fc', section: 'transparent' };
 
 function itemLabel(items: TrackItem[], idx: number): string {
   const item = items[idx];

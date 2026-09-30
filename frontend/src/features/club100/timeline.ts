@@ -1,4 +1,4 @@
-import { Song, Snippet, Effect, TrackItem } from './types';
+import { Song, Snippet, Effect, Section, TrackItem, AudioItem } from './types';
 
 // Pure, framework-free helpers for building and manipulating the timeline.
 // Kept separate from React components so they can be unit tested in isolation.
@@ -22,6 +22,27 @@ export function snippetItem(snippet: Snippet): TrackItem {
 }
 export function effectItem(effect: Effect): TrackItem {
   return { id: makeId(), type: 'effect', effect };
+}
+export function sectionItem(section: Section): TrackItem {
+  return { id: makeId(), type: 'section', section };
+}
+
+export function isAudioItem(item: TrackItem): item is AudioItem {
+  return item.type !== 'section';
+}
+
+/** The timeline as sent to the backend: sections are UI-only and carry no audio. */
+export function audioTimeline(items: TrackItem[]): AudioItem[] {
+  return items.filter(isAudioItem);
+}
+
+/** Title of the section an item belongs to (the nearest section above it), if any. */
+export function sectionAt(items: TrackItem[], idx: number): string | null {
+  for (let i = idx; i >= 0; i--) {
+    const item = items[i];
+    if (item?.type === 'section') return item.section.title || 'Untitled section';
+  }
+  return null;
 }
 
 /** Ensure every item has an id (migrates timelines persisted before ids existed). */
@@ -70,7 +91,7 @@ export function updateAt(items: TrackItem[], idx: number, item: TrackItem): Trac
 }
 
 /** Insert a copy of `effect` after every song in the timeline. */
-export function injectAutoEffect(items: TrackItem[], effect: Effect | undefined): TrackItem[] {
+export function injectAutoEffect<T extends TrackItem>(items: T[], effect: Effect | undefined): TrackItem[] {
   if (!effect) return items;
   const result: TrackItem[] = [];
   for (const item of items) {
@@ -142,6 +163,7 @@ function hashString(s: string): string {
 
 /** Identity of the audio an item produces: a changed key means its clip must be rebuilt. */
 export function clipKey(item: TrackItem): string {
+  if (item.type === 'section') return 'section';
   if (item.type === 'song') return `song|${item.song.url}|${item.song.start ?? ''}`;
   if (item.type === 'effect') return `effect|${item.effect.id}`;
   return `snippet|${hashString(item.snippet.audioUrl ?? '')}`;
@@ -157,6 +179,7 @@ export function buildSegments(
   const segments: Segment[] = [];
   let t = 0;
   for (const item of items) {
+    if (!isAudioItem(item)) continue;
     const clip = clips[item.id];
     if (clip?.status !== 'ready' || !clip.clipId || !clip.duration) continue;
     segments.push({ id: item.id, clipId: clip.clipId, start: t, duration: clip.duration });
@@ -182,4 +205,12 @@ export function formatTime(seconds: number): string {
   const m = Math.floor((s % 3600) / 60);
   const sec = String(s % 60).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/** Parse a start time typed as "1:26", "1:02:03" or plain seconds ("86"). Empty means random. */
+export function parseTimeInput(value: string): number | undefined | null {
+  const v = value.trim();
+  if (v === '') return undefined;
+  if (!/^\d+(:\d{1,2}){0,2}$/.test(v)) return null;
+  return v.split(':').reduce((total, part) => total * 60 + Number(part), 0);
 }
