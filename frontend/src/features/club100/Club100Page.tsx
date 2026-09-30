@@ -3,12 +3,13 @@ import { Song, Club100Job, TrackItem, Effect } from './types';
 import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
 import { GenerateProgress } from './GenerateProgress';
 import { SongSearch } from './SongSearch';
-import { addSong, injectAutoEffect, ensureIds, songItem, parseImportLine, audioTimeline } from './timeline';
+import { addSong, injectAutoEffect, ensureIds, songItem, effectItem, parseImportLine, audioTimeline } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
 import { BackupControls } from './BackupControls';
 import { TimelinePlayer, TimelinePlayerHandle } from './TimelinePlayer';
 import { EffectPreview } from './EffectPreview';
+import { EffectPicker } from './EffectPicker';
 import './club100.css';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
@@ -296,9 +297,12 @@ export const Club100Page: React.FC = () => {
                       </button>
                     </div>
                     {instantStatus && <div className="c100-muted">{instantStatus}</div>}
-                    <div className="c100-muted">
-                      {effects.length} sound effects available. Place one with the + on a row, or play one after every song (right).
-                    </div>
+                    <EffectPicker
+                      effects={effects}
+                      addLabel="Add at the end"
+                      onAdd={effect => setTrackItems(prev => [...prev, effectItem(effect)])}
+                    />
+                    <div className="c100-muted">To place one between two songs, use the + on a row.</div>
                   </div>
                 )}
               </div>

@@ -136,6 +136,13 @@ body { margin: 0; }
 .c100-insert-end { padding-left: 16px; }
 .c100-insert .c100-tabs { margin-bottom: 10px; }
 
+/* Sound effect picker */
+.c100-fx-list { list-style: none; margin: 0; padding: 0; max-height: 264px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.c100-fx { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.c100-fx:last-child { border-bottom: none; }
+.c100-fx.is-playing { background: var(--effect-soft); }
+.c100-fx-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Song editor */
 .c100-editor { border-top: 1px solid var(--line); background: #fbfbfd; padding: 12px 16px 14px 76px; display: flex; flex-direction: column; gap: 8px; }
 .c100-editor-head { display: flex; align-items: center; gap: 12px; }

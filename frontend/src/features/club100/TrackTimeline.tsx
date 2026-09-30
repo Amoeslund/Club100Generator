@@ -20,6 +20,7 @@ import { youtubeSearch } from './api';
 import { effectItem, formatTime, parseImportLine, sectionItem, snippetItem, songItem } from './timeline';
 import { ClipState } from './useClips';
 import { SongEditor } from './SongEditor';
+import { EffectPicker } from './EffectPicker';
 
 type RecorderInstance = { stop: () => Promise<{ blob: Blob }>; start: () => void; init: (s: MediaStream) => Promise<void> };
 type Updater = (update: (prev: TrackItem[]) => TrackItem[]) => void;
@@ -403,19 +404,9 @@ const RecordingInsert: React.FC<{ onInsert: (item: TrackItem) => void }> = ({ on
   );
 };
 
-const EffectInsert: React.FC<{ effects: Effect[]; onInsert: (item: TrackItem) => void }> = ({ effects, onInsert }) => {
-  const [id, setId] = useState('');
-  const effect = effects.find(e => e.id === id);
-  return (
-    <div className="c100-inline">
-      <select className="c100-select" value={id} onChange={e => setId(e.target.value)} aria-label="Sound effect">
-        <option value="">Choose a sound effect…</option>
-        {effects.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-      </select>
-      <button type="button" className="c100-btn c100-btn-primary" disabled={!effect} onClick={() => effect && onInsert(effectItem(effect))}>Add sound effect</button>
-    </div>
-  );
-};
+const EffectInsert: React.FC<{ effects: Effect[]; onInsert: (item: TrackItem) => void }> = ({ effects, onInsert }) => (
+  <EffectPicker effects={effects} onAdd={effect => onInsert(effectItem(effect))} addLabel="Add here" autoFocus />
+);
 
 const SectionInsert: React.FC<{ onInsert: (item: TrackItem) => void }> = ({ onInsert }) => {
   const [title, setTitle] = useState('');
