@@ -1,10 +1,11 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, Response, request, jsonify, send_file
 from flask import send_from_directory
+import json
 import os
+import queue
 import re
 import subprocess
 import threading
-import time
 import traceback
 import uuid
 import pathlib
@@ -63,37 +64,12 @@ def serve_effect(filename):
     """Serve an effect audio file by filename."""
     return send_from_directory(EFFECTS_DIR, filename)
 
-# In-memory job registry for /generate progress. Jobs are dropped after JOB_TTL seconds.
-JOBS: dict[str, dict] = {}
-JOBS_LOCK = threading.Lock()
-JOB_TTL = 60 * 60
-
-
-def _update_job(job_id, **fields):
-    with JOBS_LOCK:
-        JOBS[job_id].update(fields, updated=time.time())
-
-
-def _run_job(job_id, data):
-    def progress(stage, done, total, skipped):
-        _update_job(job_id, stage=stage, done=done, total=total, skipped=skipped)
-    try:
-        output_path = process_audio(data, job_id=job_id, progress=progress)
-        if not output_path or not os.path.exists(output_path):
-            _update_job(job_id, status='error', error='Audio generation failed, no output file was produced.')
-        else:
-            _update_job(job_id, status='done', stage='done')
-    except Exception as e:
-        # Log the full traceback server-side, but don't leak internals to the client.
-        print(traceback.format_exc())
-        _update_job(job_id, status='error', error=str(e))
-
-
 @app.route('/generate', methods=['POST'])
 def generate():
-    """Start generating audio from a timeline (or legacy format) in the background.
+    """Generate audio from a timeline (or legacy format), streaming progress as NDJSON.
 
-    Returns 202 with a jobId; poll GET /jobs/<jobId> for progress.
+    Each line is a JSON event: {"status": "processing", "stage", "done", "total", "skipped"} while
+    working, then a final {"status": "done", "jobId", "skipped"} or {"status": "error", "error"}.
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -101,26 +77,37 @@ def generate():
     if 'timeline' not in data:
         data['timeline'] = build_timeline_from_legacy(data)
     job_id = str(uuid.uuid4())
-    now = time.time()
-    with JOBS_LOCK:
-        for old_id in [j for j, job in JOBS.items() if now - job['updated'] > JOB_TTL]:
-            del JOBS[old_id]
-        JOBS[job_id] = {'status': 'processing', 'stage': 'queued', 'done': 0, 'total': 0,
-                        'skipped': [], 'error': None, 'updated': now}
-    threading.Thread(target=_run_job, args=(job_id, data), daemon=True).start()
-    return jsonify({"jobId": job_id}), 202
+    events: queue.Queue = queue.Queue()
+    state = {'skipped': []}
 
+    def progress(stage, done, total, skipped):
+        state['skipped'] = skipped
+        events.put({'status': 'processing', 'stage': stage, 'done': done, 'total': total, 'skipped': skipped})
 
-@app.route('/jobs/<job_id>', methods=['GET'])
-def job_status(job_id):
-    """Progress of a /generate job."""
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-        job = dict(job) if job else None
-    if job is None:
-        return jsonify({"error": "Unknown job"}), 404
-    job.pop('updated', None)
-    return jsonify({"jobId": job_id, **job})
+    def run():
+        try:
+            output_path = process_audio(data, job_id=job_id, progress=progress)
+            if not output_path or not os.path.exists(output_path):
+                events.put({'status': 'error', 'error': 'Audio generation failed, no output file was produced.'})
+            else:
+                events.put({'status': 'done', 'jobId': job_id, 'skipped': state['skipped']})
+        except Exception as e:
+            # Log the full traceback server-side, but don't leak internals to the client.
+            print(traceback.format_exc())
+            events.put({'status': 'error', 'error': str(e)})
+
+    # Run outside the response generator so the job finishes even if the browser disconnects.
+    threading.Thread(target=run, daemon=True).start()
+
+    def stream():
+        while True:
+            event = events.get()
+            yield json.dumps(event) + '\n'
+            if event['status'] != 'processing':
+                return
+
+    return Response(stream(), mimetype='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
+
 
 @app.route('/download/<job_id>', methods=['GET'])
 def download(job_id):

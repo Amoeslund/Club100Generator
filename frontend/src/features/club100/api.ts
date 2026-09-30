@@ -2,8 +2,8 @@ import { Club100Job, Song, TrackItem, Effect } from './types';
 import { BACKEND_URL } from './config';
 
 /**
- * Start a generation job and poll `/jobs/<id>` until it finishes, reporting
- * progress through `onProgress`. Resolves with the finished job.
+ * Generate a track. `/generate` streams NDJSON progress events on the same response,
+ * which are passed to `onProgress`; resolves with the finished job.
  */
 export async function generateTrack(
   payload: { timeline: TrackItem[] },
@@ -14,16 +14,23 @@ export async function generateTrack(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Failed to start generation (${res.status} ${res.statusText})`);
-  const { jobId } = await res.json();
+  if (!res.ok || !res.body) throw new Error(`Failed to start generation (${res.status} ${res.statusText})`);
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = '';
   for (;;) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const poll = await fetch(`${BACKEND_URL}/jobs/${jobId}`);
-    if (!poll.ok) throw new Error(`Lost track of generation job (${poll.status})`);
-    const job: Club100Job = await poll.json();
-    if (job.status === 'error') throw new Error(job.error || 'Generation failed');
-    if (job.status === 'done') return { ...job, downloadUrl: getDownloadUrl(jobId) };
-    onProgress?.(job);
+    const { value, done } = await reader.read();
+    if (done) throw new Error('Connection to the backend closed before the track was finished');
+    buffered += value;
+    const lines = buffered.split('\n');
+    buffered = lines.pop() ?? '';
+    for (const line of lines.filter(Boolean)) {
+      const event = JSON.parse(line);
+      if (event.status === 'error') throw new Error(event.error || 'Generation failed');
+      if (event.status === 'done') {
+        return { ...event, stage: 'done', done: 1, total: 1, downloadUrl: getDownloadUrl(event.jobId) };
+      }
+      onProgress?.({ jobId: '', ...event });
+    }
   }
 }
 

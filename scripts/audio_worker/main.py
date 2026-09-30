@@ -1,4 +1,5 @@
 import sys
+import hashlib
 import json
 import os
 import re
@@ -256,6 +257,10 @@ def decode_data_url(data_url: str) -> bytes:
 
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
+# Finished, loudness-normalized clips keyed by source/start/target, so re-generating an edited
+# timeline only encodes the items that changed.
+CLIP_CACHE_DIR = CACHE_DIR / "clips"
+CLIP_CACHE_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 # Downloaded songs are kept this long after their last use (prefetch a setlist days ahead of a party).
@@ -271,15 +276,23 @@ SONG_LUFS = float(os.environ.get("SONG_LUFS", "-12"))
 SNIPPET_LUFS = float(os.environ.get("SNIPPET_LUFS", "-10"))
 TRUE_PEAK_DB = -1.0
 
-def loudnorm_filter(path: Path, target_lufs: float) -> list[str]:
-    """ffmpeg args for two-pass (linear) loudness normalization of `path` to `target_lufs`.
+# Every clip is encoded once, in this exact format, so the final concat can stream-copy.
+CLIP_ENCODE = ["-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k"]
+# ffmpeg work is CPU bound; downloads are network bound and YouTube gets grumpy past a handful.
+WORKERS = int(os.environ.get("WORKERS", str(os.cpu_count() or 4)))
+DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "6"))
 
-    Returns [] if the file can't be measured (e.g. silence or too short), so encoding falls back to
+def loudnorm_filter(src, target_lufs: float) -> list[str]:
+    """ffmpeg args for two-pass (linear) loudness normalization to `target_lufs`.
+
+    `src` is a file path or a list of ffmpeg input args (e.g. ['-ss', '30', '-t', '60', '-i', path]).
+    Returns [] if the input can't be measured (e.g. silence or too short), so encoding falls back to
     leaving the level unchanged.
     """
+    inputs = src if isinstance(src, list) else ["-i", str(src)]
     base = f"loudnorm=I={target_lufs}:TP={TRUE_PEAK_DB}:LRA=11"
     probe = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af", f"{base}:print_format=json", "-f", "null", "-"],
+        ["ffmpeg", "-hide_banner", "-nostats", *inputs, "-af", f"{base}:print_format=json", "-f", "null", "-"],
         capture_output=True, text=True, timeout=FFMPEG_TIMEOUT,
     )
     match = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", probe.stderr)
@@ -339,20 +352,13 @@ def is_valid_youtube_url(url) -> bool:
     allowed = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
     return host in allowed and extract_youtube_id(url) is not None
 
-def get_youtube_duration(url):
-    """Get the duration of a YouTube video in seconds using yt-dlp."""
-    cmd = YTDLP + ["--get-duration", url]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=YTDLP_TIMEOUT)
-    duration_str = result.stdout.strip()
-    parts = duration_str.split(":")
-    if len(parts) == 3:
-        h, m, s = map(int, parts)
-        return h * 3600 + m * 60 + s
-    elif len(parts) == 2:
-        m, s = map(int, parts)
-        return m * 60 + s
-    else:
-        return int(parts[0])
+def probe_duration(path: Path) -> float:
+    """Duration of a local media file in seconds."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True, timeout=FFMPEG_TIMEOUT,
+    )
+    return float(result.stdout.strip())
 
 def ensure_cached(url) -> Path:
     """Return the cached full audio for a YouTube URL, downloading it first if needed."""
@@ -371,23 +377,52 @@ def ensure_cached(url) -> Path:
             os.replace(partial, cache_path)
     return cache_path
 
-def download_random_youtube_audio(url, out_path, start_override=None):
-    """Download a random 60s audio segment from a YouTube video, with caching."""
+def encode_clip(inputs: list[str], out: Path, target_lufs: float | None) -> Path:
+    """Encode `inputs` to `out` in CLIP_ENCODE format, loudness-normalized unless target_lufs is None.
+
+    Cached: an existing `out` is reused. Writes atomically so a crash never leaves a half clip.
+    """
+    with _get_cache_lock(out.name):
+        if out.exists():
+            os.utime(out)
+            return out
+        af = loudnorm_filter(inputs, target_lufs) if target_lufs is not None else []
+        partial = out.with_name(out.name + ".partial")
+        subprocess.run(["ffmpeg", "-y", "-v", "error", *inputs, *af, *CLIP_ENCODE, "-f", "mp3", str(partial)],
+                       check=True, timeout=FFMPEG_TIMEOUT)
+        os.replace(partial, out)
+    return out
+
+def song_clip(url, start_override=None) -> Path:
+    """Normalized 60s clip of a YouTube video, from `start_override` or a random start."""
     if not is_valid_youtube_url(url):
         raise ValueError(f"Refusing to download non-YouTube URL: {url!r}")
-    duration = get_youtube_duration(url)
+    full = ensure_cached(url)
+    duration = probe_duration(full)
     if duration <= 60:
         start = 0
+    elif start_override is not None:
+        start = max(0, min(int(duration) - 60, int(start_override)))
     else:
-        if start_override is not None:
-            start = max(0, min(duration - 60, int(start_override)))
-        else:
-            start = random.randint(0, duration - 60)
-    temp_audio = out_path.with_suffix('.full.m4a')
-    shutil.copy(ensure_cached(url), temp_audio)
-    cmd_trim = ["ffmpeg", "-y", "-ss", str(start), "-i", str(temp_audio), "-t", "60", "-acodec", "mp3", str(out_path)]
-    subprocess.run(cmd_trim, check=True, timeout=FFMPEG_TIMEOUT)
-    temp_audio.unlink(missing_ok=True)
+        start = random.randint(0, int(duration) - 60)
+    clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start}_{SONG_LUFS:g}.mp3"
+    return encode_clip(["-ss", str(start), "-t", "60", "-i", str(full)], clip, SONG_LUFS)
+
+def snippet_clip(audio_bytes: bytes, scratch_dir: Path) -> Path:
+    """Normalized clip of an uploaded/recorded snippet, cached by content hash."""
+    digest = hashlib.sha256(audio_bytes).hexdigest()[:20]
+    clip = CLIP_CACHE_DIR / f"snippet_{digest}_{SNIPPET_LUFS:g}.mp3"
+    if clip.exists():
+        os.utime(clip)
+        return clip
+    upload = scratch_dir / f"upload_{digest}"
+    upload.write_bytes(audio_bytes)
+    return encode_clip(["-i", str(upload)], clip, SNIPPET_LUFS)
+
+def effect_clip(effect_path: Path) -> Path:
+    """Effect re-encoded to the clip format at its original level (no loudnorm)."""
+    clip = CLIP_CACHE_DIR / f"effect_{effect_path.stem}_{int(effect_path.stat().st_mtime)}.mp3"
+    return encode_clip(["-i", str(effect_path)], clip, None)
 
 # --- Main Processing Function ---
 def item_label(i: int, item: dict) -> str:
@@ -414,138 +449,73 @@ def process_audio(data: dict, job_id: str | None = None, progress=None) -> str:
         if progress:
             progress(stage, done, total, list(skipped))
 
-    # Bound disk usage: drop stale generated output (1h) and cached downloads (24h).
+    # Bound disk usage: drop stale generated output (1h) and unused cached audio.
     cleanup_old_files(OUTPUT_DIR, 60 * 60)
     cleanup_old_files(CACHE_DIR, CACHE_MAX_AGE_HOURS * 60 * 60)
+    cleanup_old_files(CLIP_CACHE_DIR, CACHE_MAX_AGE_HOURS * 60 * 60)
     job_id = job_id or str(uuid.uuid4())
     job_dir = Path(tempfile.gettempdir()) / f"club100_{job_id}"
     job_dir.mkdir(exist_ok=True)
-    audio_files = []
     try:
-        # 1. Download all songs in parallel first
-        song_download_tasks = []
-        song_download_results = {}
-        for i, item in enumerate(timeline):
-            if item.get('type') == 'song' and 'song' in item:
-                song = item['song']
-                url = song.get('url')
-                start_override = song.get('start')
-                song_raw = job_dir / f"song_{i:03d}_raw.mp3"
-                song_download_tasks.append((i, url, song_raw, start_override))
-        def download_song_task(args):
-            i, url, song_raw, start_override = args
+        # 1. Make sure every song's full audio is in the cache (network bound, instant when cached).
+        urls = list(dict.fromkeys(
+            item['song'].get('url') for item in timeline
+            if item.get('type') == 'song' and isinstance(item.get('song'), dict)
+        ))
+
+        def fetch(url):
             try:
-                download_random_youtube_audio(url, song_raw, start_override)
-                return (i, song_raw)
+                ensure_cached(url)
             except Exception as e:
                 print(f"Error downloading {url}: {e}", file=sys.stderr)
-                return (i, None)
-        report('download', 0, len(song_download_tasks))
-        if song_download_tasks:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(download_song_task, args) for args in song_download_tasks]
-                for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
-                    result = future.result()
-                    if result is not None and isinstance(result, tuple) and len(result) == 2:
-                        i, song_raw = result
-                        if i is not None and song_raw is not None:
-                            song_download_results[i] = song_raw
-                    report('download', done, len(song_download_tasks))
 
-        # 2. Process all timeline items in parallel (re-encode/generate/copy)
-        def process_item_task(args):
-            i, item = args
-            try:
-                if item.get('type') == 'song' and 'song' in item:
-                    song = item['song']
-                    url = song.get('url')
-                    song_raw = song_download_results.get(i)
-                    song_std = job_dir / f"song_{i:03d}.mp3"
-                    if song_raw and song_raw.exists():
-                        cmd = ["ffmpeg", "-y", "-i", str(song_raw), *loudnorm_filter(song_raw, SONG_LUFS),
-                               "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(song_std)]
-                        subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
-                        song_raw.unlink(missing_ok=True)
-                        return (i, song_std)
-                    else:
-                        print(f"Song download failed for {url}", file=sys.stderr)
-                        return (i, None)
-                elif item.get('type') == 'snippet' and 'snippet' in item:
-                    snippet = item['snippet']
-                    snippet_faded = job_dir / f"snippet_{i:03d}.mp3"
-                    if snippet.get('type') == 'upload' and snippet.get('audioUrl'):
-                        audio_bytes = decode_data_url(snippet['audioUrl'])
-                        temp_upload = job_dir / f"snippet_{i:03d}_upload"
-                        with open(temp_upload, 'wb') as f:
-                            f.write(audio_bytes)
-                        cmd = ["ffmpeg", "-y", "-i", str(temp_upload), *loudnorm_filter(temp_upload, SNIPPET_LUFS),
-                               "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(snippet_faded)]
-                        subprocess.run(cmd, check=True, timeout=FFMPEG_TIMEOUT)
-                        temp_upload.unlink(missing_ok=True)
-                        return (i, snippet_faded)
-                    else:
-                        print(f"Skipping unsupported snippet (only uploaded audio is supported): {snippet.get('type')}", file=sys.stderr)
-                        return (i, None)
-                elif item.get('type') == 'effect' and 'effect' in item:
-                    effect = item['effect']
-                    effect_id = effect.get('id')
-                    effect_meta = EFFECTS_MAP.get(effect_id)
-                    if effect_meta:
-                        filename = effect_meta['audioUrl'].split('/')[-1]
-                        effect_path = EFFECTS_DIR / filename
-                        if effect_path.exists():
-                            # Copy to job dir to avoid file lock issues
-                            effect_copy = job_dir / f"effect_{i:03d}.mp3"
-                            shutil.copy(effect_path, effect_copy)
-                            return (i, effect_copy)
-                        else:
-                            print(f"Effect file not found: {effect_path}", file=sys.stderr)
-                            return (i, None)
-                    else:
-                        print(f"Unknown effect id: {effect_id}", file=sys.stderr)
-                        return (i, None)
-            except Exception as e:
-                print(f"Error processing item {i}: {e}", file=sys.stderr)
-                return (i, None)
+        report('download', 0, len(urls))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as executor:
+            for done, _ in enumerate(concurrent.futures.as_completed(executor.submit(fetch, u) for u in urls), 1):
+                report('download', done, len(urls))
 
-        item_tasks = [(i, item) for i, item in enumerate(timeline)]
-        processed_results = {}
-        report('process', 0, len(item_tasks))
-        if item_tasks:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(process_item_task, args) for args in item_tasks]
-                for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
-                    result = future.result()
-                    if result is not None and isinstance(result, tuple) and len(result) == 2:
-                        i, out_path = result
-                        if i is not None and out_path is not None:
-                            processed_results[i] = out_path
-                        elif i is not None:
-                            skipped.append(item_label(i, timeline[i]))
-                    report('process', done, len(item_tasks))
+        # 2. Build a normalized clip per item (CPU bound, cached per song/start, snippet and effect).
+        def build(i, item):
+            kind = item.get('type')
+            if kind == 'song' and isinstance(item.get('song'), dict):
+                return song_clip(item['song'].get('url'), item['song'].get('start'))
+            if kind == 'snippet' and isinstance(item.get('snippet'), dict):
+                snippet = item['snippet']
+                if snippet.get('type') != 'upload' or not snippet.get('audioUrl'):
+                    raise ValueError(f"unsupported snippet type {snippet.get('type')!r}")
+                return snippet_clip(decode_data_url(snippet['audioUrl']), job_dir)
+            if kind == 'effect' and isinstance(item.get('effect'), dict):
+                effect_meta = EFFECTS_MAP.get(item['effect'].get('id'))
+                if not effect_meta:
+                    raise ValueError(f"unknown effect id {item['effect'].get('id')!r}")
+                effect_path = EFFECTS_DIR / effect_meta['audioUrl'].split('/')[-1]
+                if not effect_path.exists():
+                    raise FileNotFoundError(effect_path)
+                return effect_clip(effect_path)
+            raise ValueError(f"unknown item type {kind!r}")
 
-        # 3. Collect processed audio files in timeline order
-        audio_files = []
-        for i in range(len(timeline)):
-            out_path = processed_results.get(i)
-            if out_path and hasattr(out_path, 'exists') and out_path.exists():
-                audio_files.append(out_path)
-            else:
-                print(f"Skipping item {i} due to processing error", file=sys.stderr)
+        clips: dict[int, Path] = {}
+        report('process', 0, len(timeline))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
+            futures = {executor.submit(build, i, item): i for i, item in enumerate(timeline)}
+            for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                i = futures[future]
+                try:
+                    clips[i] = future.result()
+                except Exception as e:
+                    print(f"Skipping item {i}: {e}", file=sys.stderr)
+                    skipped.append(item_label(i, timeline[i]))
+                report('process', done, len(timeline))
+
+        # 3. Stitch in timeline order. All clips share CLIP_ENCODE, so the MP3 frames are copied as-is.
+        report('concat', 0, 1)
         concat_list = job_dir / "concat.txt"
         with open(concat_list, "w", encoding="utf-8") as f:
-            for af in audio_files:
-                if not af.exists() or af.stat().st_size == 0:
-                    print(f"[WARN] File missing or empty before concat: {af}", file=sys.stderr)
-                f.write(f"file '{af.as_posix()}'\n")
-        report('concat', 0, 1)
+            for i in sorted(clips):
+                f.write(f"file '{clips[i].as_posix()}'\n")
         output_mp3 = OUTPUT_DIR / f"club100_{job_id}.mp3"
-        # Re-encode the concatenated audio to ensure valid MP3 output
-        cmd_concat = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "192k", str(output_mp3)
-        ]
-        subprocess.run(cmd_concat, check=True, timeout=FFMPEG_TIMEOUT)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+                        "-c", "copy", str(output_mp3)], check=True, timeout=FFMPEG_TIMEOUT)
         return str(output_mp3)
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)

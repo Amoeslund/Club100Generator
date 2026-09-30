@@ -51,7 +51,7 @@ class TestDownloadGuard:
     def test_refuses_non_youtube_url(self, tmp_path):
         import pytest
         with pytest.raises(ValueError):
-            main.download_random_youtube_audio('https://evil.com/x', tmp_path / 'out.mp3')
+            main.song_clip('https://evil.com/x')
 
 
 class TestCacheLocks:
@@ -152,3 +152,38 @@ class TestLoudnormFilter:
     def test_silence_leaves_level_unchanged(self, tmp_path):
         path = self._tone(tmp_path, 'anullsrc=r=44100:cl=stereo:d=3')
         assert main.loudnorm_filter(path, -12) == []
+
+
+class TestClipPipeline:
+    def _tone(self, path, seconds, rate=48000, layout='mono'):
+        import subprocess
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                        f'sine=frequency=440:duration={seconds}:sample_rate={rate}',
+                        '-ac', '1' if layout == 'mono' else '2', str(path)], check=True)
+        return path
+
+    def test_encode_clip_is_cached(self, tmp_path, monkeypatch):
+        src = self._tone(tmp_path / 'fx.mp3', 1)
+        out = tmp_path / 'clip.mp3'
+        main.encode_clip(['-i', str(src)], out, None)
+        assert out.exists()
+        monkeypatch.setattr(main.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(AssertionError('re-encoded')))
+        assert main.encode_clip(['-i', str(src)], out, None) == out
+
+    def test_process_audio_concats_mixed_formats(self, tmp_path, monkeypatch):
+        # Effects in different sample rates/channels must still stitch into one valid MP3.
+        monkeypatch.setattr(main, 'CLIP_CACHE_DIR', tmp_path)
+        monkeypatch.setattr(main, 'EFFECTS_DIR', tmp_path)
+        self._tone(tmp_path / 'a.mp3', 2, 48000, 'mono')
+        self._tone(tmp_path / 'b.mp3', 3, 22050, 'stereo')
+        monkeypatch.setitem(main.EFFECTS_MAP, 'ta', {'id': 'ta', 'audioUrl': '/effects/a.mp3'})
+        monkeypatch.setitem(main.EFFECTS_MAP, 'tb', {'id': 'tb', 'audioUrl': '/effects/b.mp3'})
+        seen = []
+        out = main.process_audio({'timeline': [
+            {'type': 'effect', 'effect': {'id': 'ta'}},
+            {'type': 'effect', 'effect': {'id': 'nope', 'name': 'Missing'}},
+            {'type': 'effect', 'effect': {'id': 'tb'}},
+        ]}, progress=lambda *a: seen.append(a))
+        assert 4.8 < main.probe_duration(Path(out)) < 5.3
+        assert seen[-1][3] == ['Missing']
+        Path(out).unlink()

@@ -1,5 +1,5 @@
+import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -57,13 +57,8 @@ class TestGenerateEndpoint:
         assert resp.status_code == 400
 
     @staticmethod
-    def wait_for_job(client, job_id):
-        for _ in range(200):
-            body = client.get(f'/jobs/{job_id}').get_json()
-            if body['status'] != 'processing':
-                return body
-            time.sleep(0.01)
-        raise AssertionError('job did not finish')
+    def events(resp):
+        return [json.loads(line) for line in resp.get_data(as_text=True).splitlines()]
 
     def test_error_response_has_no_traceback(self, client, monkeypatch):
         def boom(_data, **_kwargs):
@@ -71,13 +66,13 @@ class TestGenerateEndpoint:
 
         monkeypatch.setattr(server, 'process_audio', boom)
         resp = client.post('/generate', json={'timeline': []})
-        assert resp.status_code == 202
-        body = self.wait_for_job(client, resp.get_json()['jobId'])
-        assert body['status'] == 'error'
-        assert 'traceback' not in body
-        assert body['error'] == 'kaboom'
+        assert resp.status_code == 200
+        final = self.events(resp)[-1]
+        assert final['status'] == 'error'
+        assert 'traceback' not in final
+        assert final['error'] == 'kaboom'
 
-    def test_reports_progress_and_done(self, client, monkeypatch, tmp_path):
+    def test_streams_progress_then_done(self, client, monkeypatch, tmp_path):
         out = tmp_path / 'out.mp3'
         out.write_bytes(b'x')
 
@@ -86,14 +81,12 @@ class TestGenerateEndpoint:
             return str(out)
 
         monkeypatch.setattr(server, 'process_audio', fake)
-        job_id = client.post('/generate', json={'timeline': []}).get_json()['jobId']
-        body = self.wait_for_job(client, job_id)
-        assert body['status'] == 'done'
-        assert body['skipped'] == ['Broken Song']
-        assert body['total'] == 2
-
-    def test_unknown_job(self, client):
-        assert client.get('/jobs/nope').status_code == 404
+        events = self.events(client.post('/generate', json={'timeline': []}))
+        assert events[0] == {'status': 'processing', 'stage': 'process', 'done': 1, 'total': 2,
+                             'skipped': ['Broken Song']}
+        assert events[-1]['status'] == 'done'
+        assert events[-1]['skipped'] == ['Broken Song']
+        assert events[-1]['jobId']
 
 
 class TestYtSearchEndpoint:
