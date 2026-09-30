@@ -1,12 +1,14 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TrackItem } from './types';
 import { ClipState } from './useClips';
 import { getClipUrl } from './api';
-import { buildSegments, formatTime, locate } from './timeline';
+import { buildSegments, formatTime, locate, nextReady, Segment } from './timeline';
 
 export type TimelinePlayerHandle = { playItem: (id: string) => void };
 
 const MINUTES = 100;
+const LABEL_SPACING_PX = 22; // minimum room per minute number on the track
+const TICK_SPACING_PX = 72; // minimum room per time label on the ruler
 
 function itemTitle(item: TrackItem | undefined): string {
   if (!item) return '';
@@ -17,9 +19,10 @@ function itemTitle(item: TrackItem | undefined): string {
 }
 
 /**
- * Plays the prepared clips back to back as one continuous track (including the "after every
- * song" effect), with a scrub bar and a grid of the 100 minutes. Nothing is generated: each
- * clip is the exact audio the final MP3 will contain.
+ * The whole Club 100 as one big timeline docked at the bottom of the screen. Every item is a
+ * block sized by its length (songs numbered by minute, section headings above), and the clips
+ * play back to back exactly as the MP3 will sound. Items still preparing or failed are shown but
+ * skipped. Click or drag anywhere on it to scrub.
  */
 export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
   items: TrackItem[];
@@ -32,61 +35,93 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
   const segments = useMemo(() => buildSegments(items, clips, afterSong), [items, clips, afterSong]);
   const total = segments.length ? segments[segments.length - 1].start + segments[segments.length - 1].duration : 0;
   const audioRef = useRef<HTMLAudioElement>(null);
-  const barRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [trackWidth, setTrackWidth] = useState(1000);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [offset, setOffset] = useState(0); // seconds into the current segment
   const [playing, setPlaying] = useState(false);
+  const [hover, setHover] = useState<{ x: number; t: number } | null>(null);
   const pendingSeek = useRef<number | null>(null);
   const loadedClip = useRef<string | null>(null);
   // Loading a new src fires 'pause'; that must not stop continuous playback.
   const switching = useRef(false);
 
-  const index = segments.findIndex(s => s.id === currentId);
+  const index = segments.findIndex(s => s.id === currentId && s.status === 'ready');
   const current = index >= 0 ? segments[index] : null;
   const time = current ? current.start + offset : 0;
 
   const itemsById = useMemo(() => new Map(items.map(it => [it.id, it])), [items]);
-  const songs = useMemo(() => items.filter(it => it.type === 'song'), [items]);
-  const sectionStarts = useMemo(() => {
-    // Song ids that are the first song after a section heading.
-    const starts = new Set<string>();
-    let pending = false;
+  // Minute (song number) of every audio item; snippets/effects belong to the song before them.
+  const minuteOf = useMemo(() => {
+    const map = new Map<string, number>();
+    let m = 0;
     for (const it of items) {
-      if (it.type === 'section') pending = true;
-      else if (it.type === 'song' && pending) { starts.add(it.id); pending = false; }
+      if (it.type === 'song') m++;
+      if (it.type !== 'section') map.set(it.id, m);
     }
-    return starts;
+    return map;
   }, [items]);
+  const songCount = useMemo(() => items.filter(it => it.type === 'song').length, [items]);
   const sectionOf = useMemo(() => {
     const map = new Map<string, string>();
-    let title: string | null = null;
+    let title = '';
     for (const it of items) {
-      if (it.type === 'section') title = it.section.title || 'Untitled section';
+      if (it.type === 'section') title = it.section.title;
       else if (title) map.set(it.id, title);
     }
     return map;
   }, [items]);
+  // Section bands: from the first segment after a section heading to the next heading.
+  const bands = useMemo(() => {
+    const firstSeg = new Map<string, Segment>();
+    for (const s of segments) if (!firstSeg.has(s.itemId)) firstSeg.set(s.itemId, s);
+    const result: { id: string; title: string; start: number; end: number }[] = [];
+    let open: { id: string; title: string; start: number | null } | null = null;
+    const close = (end: number) => {
+      if (open && open.start !== null && end > open.start) result.push({ id: open.id, title: open.title, start: open.start, end });
+    };
+    for (const it of items) {
+      if (it.type === 'section') {
+        close(nextStart(it));
+        open = { id: it.id, title: it.section.title, start: null };
+      } else if (open && open.start === null) {
+        open.start = firstSeg.get(it.id)?.start ?? null;
+      }
+    }
+    close(total);
+    return result;
+
+    // Start time of the first audio item after `section` (where the previous band ends).
+    function nextStart(section: TrackItem): number {
+      for (let i = items.indexOf(section) + 1; i < items.length; i++) {
+        const seg = firstSeg.get(items[i].id);
+        if (seg) return seg.start;
+      }
+      return total;
+    }
+  }, [items, segments, total]);
 
   const currentItem = current ? itemsById.get(current.itemId) : undefined;
-  const minute = current ? songs.findIndex(s => s.id === current.itemId) + 1 || null : null;
-  // Snippets/effects belong to the minute of the song before them.
-  const minuteOfTime = useMemo(() => {
-    if (!current) return null;
-    let m = 0;
-    for (const it of items) {
-      if (it.type === 'song') m++;
-      if (it.id === current.itemId) return m || null;
-    }
-    return null;
-  }, [items, current]);
-  const shownMinute = minute ?? minuteOfTime;
+  const minute = current ? minuteOf.get(current.itemId) || null : null;
+  const audioItems = items.filter(it => it.type !== 'section');
+  const readyCount = audioItems.filter(it => clips[it.id]?.status === 'ready').length;
+  const pendingCount = audioItems.filter(it => clips[it.id]?.status === 'pending').length;
+  const errorCount = audioItems.filter(it => clips[it.id]?.status === 'error').length;
 
   useEffect(() => onActiveChange(current ? current.itemId : null), [current?.itemId, onActiveChange]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useLayoutEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setTrackWidth(entry.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Load the current segment's clip, or reload it at the same spot if it was rebuilt (e.g. new start).
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !current) return;
+    if (!audio || !current?.clipId) return;
     if (loadedClip.current !== current.clipId) {
       loadedClip.current = current.clipId;
       if (pendingSeek.current === null) pendingSeek.current = Math.min(offset, current.duration);
@@ -103,24 +138,32 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
     if (!playing && !audio.paused) audio.pause();
   }, [playing, current?.clipId]);
 
+  /** Move to global time `t`; a spot inside an item that isn't ready moves on to the next ready one. */
   const seekTo = useCallback((t: number) => {
     const hit = locate(segments, Math.max(0, Math.min(t, total)));
     if (!hit) return;
-    const seg = segments[hit.index];
+    let i = hit.index;
+    let at = hit.offset;
+    if (segments[i].status !== 'ready') {
+      i = nextReady(segments, i);
+      at = 0;
+      if (i < 0) return;
+    }
+    const seg = segments[i];
     const audio = audioRef.current;
-    setOffset(hit.offset);
+    setOffset(at);
     setCurrentId(seg.id);
     if (audio && loadedClip.current === seg.clipId) {
       // Same file already loaded (a repeated song or effect): just move the playhead.
-      audio.currentTime = hit.offset;
+      audio.currentTime = at;
       if (playing && audio.paused) audio.play().catch(() => setPlaying(false));
     } else {
-      pendingSeek.current = hit.offset;
+      pendingSeek.current = at;
     }
   }, [segments, total, playing]);
 
   const playItem = useCallback((id: string) => {
-    const seg = segments.find(s => s.itemId === id);
+    const seg = segments.find(s => s.itemId === id && s.status === 'ready');
     if (!seg) return;
     seekTo(seg.start);
     setPlaying(true);
@@ -129,34 +172,41 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
 
   const step = (delta: number) => {
     // Jump by timeline item (a song together with its after-song effect counts as one).
-    const itemStarts = segments.filter((s, i) => i === 0 || s.itemId !== segments[i - 1].itemId);
-    const pos = itemStarts.findIndex(s => s.itemId === current?.itemId);
-    const target = itemStarts[Math.max(0, Math.min(itemStarts.length - 1, (pos < 0 ? 0 : pos) + delta))];
+    const starts = segments.filter(s => s.status === 'ready' && !s.after);
+    const pos = starts.findIndex(s => s.itemId === current?.itemId);
+    const target = starts[Math.max(0, Math.min(starts.length - 1, (pos < 0 ? 0 : pos) + delta))];
     if (target) seekTo(target.start);
   };
 
   const togglePlay = () => {
-    if (!current && segments.length) {
-      pendingSeek.current = 0;
-      setCurrentId(segments[0].id);
+    if (!current) {
+      const first = nextReady(segments, 0);
+      if (first < 0) return;
+      seekTo(segments[first].start);
     }
     setPlaying(p => !p);
   };
 
-  const scrubAt = (clientX: number) => {
-    const rect = barRef.current?.getBoundingClientRect();
-    if (!rect || total === 0) return;
-    seekTo(((clientX - rect.left) / rect.width) * total);
+  const timeAtX = (clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || total === 0) return null;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    return { x, t: (x / rect.width) * total };
   };
 
-  const audioItems = items.filter(it => it.type !== 'section');
-  const readyCount = audioItems.filter(it => clips[it.id]?.status === 'ready').length;
-  const pendingCount = audioItems.filter(it => clips[it.id]?.status === 'pending').length;
-  const errorCount = audioItems.filter(it => clips[it.id]?.status === 'error').length;
-  const cellCount = Math.max(MINUTES, Math.ceil(songs.length / 10) * 10);
+  const pct = (t: number) => (total ? (t / total) * 100 : 0);
+  const hoverSeg = hover ? segments[locate(segments, hover.t)?.index ?? -1] : undefined;
+  const hoverItem = hoverSeg ? itemsById.get(hoverSeg.itemId) : undefined;
+  // Number every minute when there is room, otherwise every 2nd/5th/10th... so labels never collide.
+  const perMinutePx = songCount ? trackWidth / songCount : trackWidth;
+  const labelEvery = [1, 2, 5, 10, 20, 25, 50].find(n => n * perMinutePx >= LABEL_SPACING_PX) ?? 50;
+  const tickEvery = ([5, 10, 15, 20, 30, 60].find(min => total && ((min * 60) / total) * trackWidth >= TICK_SPACING_PX) ?? 60) * 60;
+  const ticks = Array.from({ length: Math.floor(total / tickEvery) }, (_, i) => (i + 1) * tickEvery);
+  const describe = (seg: Segment | undefined, item: TrackItem | undefined) =>
+    seg?.after ? `${afterSongName ?? 'Sound effect'}, after ${itemTitle(item)}` : itemTitle(item);
 
   return (
-    <div className="c100-panel c100-player">
+    <div className="c100-dock" role="region" aria-label="Player">
       <audio
         ref={audioRef}
         preload="auto"
@@ -173,93 +223,110 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
         onPause={() => { if (!switching.current && audioRef.current && !audioRef.current.ended) setPlaying(false); }}
         onPlay={() => setPlaying(true)}
         onEnded={() => {
-          const next = segments[index + 1];
-          if (next) seekTo(next.start);
+          const next = nextReady(segments, index + 1);
+          if (next >= 0) seekTo(segments[next].start);
           else setPlaying(false);
         }}
       />
-      <div className="c100-now" aria-live="polite">
-        <span className={`c100-now-minute${shownMinute ? '' : ' is-idle'}`}>{shownMinute ?? 0}</span>
-        <span className="c100-now-of">of {Math.max(MINUTES, songs.length)}</span>
-      </div>
-      <button
-        type="button"
-        className="c100-now-title"
-        disabled={!currentItem}
-        onClick={() => current && document.getElementById(`item-${current.itemId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-        title={currentItem ? 'Show in the running order' : undefined}
-      >
-        {currentItem
-          ? `${current?.id.endsWith(':after') ? `${afterSongName ?? 'Sound effect'}, after ${itemTitle(currentItem)}` : itemTitle(currentItem)}${sectionOf.get(currentItem.id) ? `, ${sectionOf.get(currentItem.id)}` : ''}`
-          : readyCount ? 'Press play to hear your Club 100' : 'Add songs to hear your Club 100'}
-      </button>
-
-      <div className="c100-transport">
-        <button type="button" className="c100-icon" onClick={() => step(-1)} aria-label="Previous item" disabled={!readyCount}>⏮</button>
-        <button type="button" className="c100-play" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} disabled={!readyCount}>{playing ? '❚❚' : '▶'}</button>
-        <button type="button" className="c100-icon" onClick={() => step(1)} aria-label="Next item" disabled={!readyCount}>⏭</button>
-        <span className="c100-time">{formatTime(time)} / {formatTime(total)}</span>
-      </div>
-
-      <div
-        ref={barRef}
-        className="c100-scrub"
-        role="slider"
-        tabIndex={0}
-        aria-label="Position in the track"
-        aria-valuemin={0}
-        aria-valuemax={Math.round(total)}
-        aria-valuenow={Math.round(time)}
-        aria-valuetext={formatTime(time)}
-        onPointerDown={e => { try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic or stale pointer */ } scrubAt(e.clientX); }}
-        onPointerMove={e => { if (e.buttons === 1) scrubAt(e.clientX); }}
-        onKeyDown={e => {
-          if (e.key === 'ArrowRight') seekTo(time + (e.shiftKey ? 60 : 5));
-          if (e.key === 'ArrowLeft') seekTo(time - (e.shiftKey ? 60 : 5));
-        }}
-      >
-        {segments.map(seg => (
-          <span
-            key={seg.id}
-            data-type={seg.id.endsWith(':after') ? 'effect' : itemsById.get(seg.itemId)?.type}
-            style={{ flex: `${seg.duration} 0 0` }}
-          />
-        ))}
-        {total > 0 && <span className="c100-playhead" style={{ left: `${(time / total) * 100}%` }} />}
+      <div className="c100-dock-head">
+        <div className="c100-transport">
+          <button type="button" className="c100-icon" onClick={() => step(-1)} aria-label="Previous item" disabled={!readyCount}>⏮</button>
+          <button type="button" className="c100-play" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} disabled={!readyCount}>{playing ? '❚❚' : '▶'}</button>
+          <button type="button" className="c100-icon" onClick={() => step(1)} aria-label="Next item" disabled={!readyCount}>⏭</button>
+        </div>
+        <div className="c100-now" aria-live="polite">
+          <span className={`c100-now-minute${minute ? '' : ' is-idle'}`}>{minute ?? 0}</span>
+          <span className="c100-now-of">of {Math.max(MINUTES, songCount)}</span>
+        </div>
+        <div className="c100-now-text">
+          <button
+            type="button"
+            className="c100-now-title"
+            disabled={!currentItem}
+            onClick={() => current && document.getElementById(`item-${current.itemId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+            title={currentItem ? 'Show in the running order' : undefined}
+          >
+            {currentItem ? describe(current ?? undefined, currentItem) : readyCount ? 'Press play to hear your Club 100' : 'Add songs to hear your Club 100'}
+          </button>
+          {currentItem && sectionOf.get(currentItem.id) && <div className="c100-muted">{sectionOf.get(currentItem.id)}</div>}
+        </div>
+        <div className="c100-dock-status">
+          <span className="c100-time">{formatTime(time)} / {formatTime(total)}</span>
+          <span className="c100-muted">
+            {readyCount === audioItems.length ? `All ${audioItems.length} clips ready` : `${readyCount} of ${audioItems.length} clips ready`}
+            {pendingCount > 0 && `, ${pendingCount} preparing`}
+            {errorCount > 0 && <span className="c100-error">, {errorCount} failed</span>}
+          </span>
+        </div>
       </div>
 
-      <div className="c100-grid" role="group" aria-label="Minutes">
-        {Array.from({ length: cellCount }, (_, i) => {
-          const song = songs[i];
-          if (!song) return <span key={`empty-${i}`} className="c100-cell is-missing" aria-hidden>{i + 1}</span>;
-          const clip = clips[song.id];
-          const state = song.id === currentItem?.id || (currentItem && minuteOfTime === i + 1 && currentItem.type !== 'song')
-            ? 'is-playing'
-            : clip?.status === 'ready' ? 'is-ready' : clip?.status === 'error' ? 'is-error' : 'is-pending';
-          const section = sectionOf.get(song.id);
-          const label = `Minute ${i + 1}: ${itemTitle(song)}${section ? ` (${section})` : ''}${clip?.status === 'error' ? `. Failed: ${clip.error}` : ''}`;
-          return (
-            <button
-              key={song.id}
-              type="button"
-              className={`c100-cell ${state}${sectionStarts.has(song.id) ? ' is-section-start' : ''}`}
-              title={label}
-              aria-label={label}
-              disabled={clip?.status !== 'ready'}
-              onClick={() => playItem(song.id)}
-            >
-              {i + 1}
-            </button>
-          );
-        })}
-      </div>
-      <div className="c100-grid-foot c100-muted">
-        <span>{readyCount} of {audioItems.length} clips ready</span>
-        <span>
-          {pendingCount > 0 && `${pendingCount} preparing`}
-          {pendingCount > 0 && errorCount > 0 && ', '}
-          {errorCount > 0 && <span className="c100-error">{errorCount} failed</span>}
-        </span>
+      <div className="c100-timeline">
+        <div className="c100-bands" aria-hidden>
+          {bands.map(b => (
+            <span key={b.id} className="c100-band" style={{ left: `${pct(b.start)}%`, width: `${pct(b.end - b.start)}%` }} title={b.title || undefined}>
+              {b.title}
+            </span>
+          ))}
+        </div>
+        <div
+          ref={trackRef}
+          className="c100-track"
+          role="slider"
+          tabIndex={0}
+          aria-label="Position in the Club 100"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(total)}
+          aria-valuenow={Math.round(time)}
+          aria-valuetext={`Minute ${minute ?? 0}, ${formatTime(time)}`}
+          onPointerDown={e => {
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic or stale pointer */ }
+            const hit = timeAtX(e.clientX);
+            if (hit) seekTo(hit.t);
+          }}
+          onPointerMove={e => {
+            const hit = timeAtX(e.clientX);
+            setHover(hit);
+            if (hit && e.buttons === 1) seekTo(hit.t);
+          }}
+          onPointerLeave={() => setHover(null)}
+          onKeyDown={e => {
+            if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(time + (e.shiftKey ? 60 : 5)); }
+            if (e.key === 'ArrowLeft') { e.preventDefault(); seekTo(time - (e.shiftKey ? 60 : 5)); }
+            if (e.key === 'Home') { e.preventDefault(); seekTo(0); }
+          }}
+        >
+          {segments.map(seg => {
+            const m = minuteOf.get(seg.itemId) ?? 0;
+            const isSong = seg.kind === 'song' && !seg.after;
+            const showLabel = isSong && (m % labelEvery === 0 || (m === 1 && labelEvery <= 5));
+            const isCurrent = !!current && seg.id === current.id;
+            return (
+              <span
+                key={seg.id}
+                className={`c100-block is-${seg.status}${isCurrent ? ' is-current' : ''}`}
+                data-kind={seg.kind}
+                style={{ left: `${pct(seg.start)}%`, width: `${pct(seg.duration)}%` }}
+              >
+                {showLabel && <span className="c100-block-label">{m}</span>}
+              </span>
+            );
+          })}
+          {total > 0 && <span className="c100-track-playhead" style={{ left: `${pct(time)}%` }} />}
+          {hover && hoverItem && (
+            <span className="c100-tip" style={{ left: hover.x }}>
+              {hoverItem.type === 'song' && !hoverSeg?.after ? `Minute ${minuteOf.get(hoverItem.id)}: ` : ''}
+              {describe(hoverSeg, hoverItem)}
+              {hoverSeg?.status === 'pending' && ' (preparing)'}
+              {hoverSeg?.status === 'error' && ' (failed)'}
+              <span className="c100-tip-time"> {formatTime(hover.t)}</span>
+            </span>
+          )}
+        </div>
+        <div className="c100-ruler" aria-hidden>
+          <span style={{ left: 0, transform: 'none' }}>0:00</span>
+          {ticks.map(t => ((pct(t) / 100) * trackWidth > 44 && (pct(t) / 100) * trackWidth < trackWidth - 64 ? <span key={t} style={{ left: `${pct(t)}%` }}>{formatTime(t)}</span> : null))}
+          <span style={{ left: 'auto', right: 0, transform: 'none' }}>{formatTime(total)}</span>
+        </div>
       </div>
     </div>
   );

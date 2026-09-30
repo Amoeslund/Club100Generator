@@ -328,8 +328,7 @@ export const Club100Page: React.FC = () => {
             </Suspense>
           </main>
 
-          <aside className="c100-side" aria-label="Player and export">
-            <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} afterSong={autoEffect ? clips[AFTER_SONG_ID] : undefined} afterSongName={autoEffect?.name} onActiveChange={setActiveItemId} />
+          <aside className="c100-side" aria-label="Export">
 
             <div className="c100-panel c100-stack">
               <label className="c100-stack" style={{ gap: 4 }}>
@@ -361,6 +360,7 @@ export const Club100Page: React.FC = () => {
           </aside>
         </div>
       </div>
+      <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} afterSong={autoEffect ? clips[AFTER_SONG_ID] : undefined} afterSongName={autoEffect?.name} onActiveChange={setActiveItemId} />
     </div>
   );
 };

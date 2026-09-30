@@ -172,30 +172,57 @@ export function clipKey(item: TrackItem): string {
   return `snippet|${hashString(item.snippet.audioUrl ?? '')}`;
 }
 
-/** One stretch of the previewed track. `itemId` is the timeline item it belongs to. */
-export type Segment = { id: string; itemId: string; clipId: string; start: number; duration: number };
+/**
+ * One stretch of the previewed track. `itemId` is the timeline item it belongs to; `after` marks
+ * the "effect after every song" that follows a song. Only `ready` segments have audio: the others
+ * are laid out with an estimated length so the timeline shows every item, and playback skips them.
+ */
+export type Segment = {
+  id: string;
+  itemId: string;
+  kind: 'song' | 'snippet' | 'effect';
+  status: 'ready' | 'pending' | 'error';
+  clipId?: string;
+  start: number;
+  duration: number;
+  after?: boolean;
+};
 
 type ClipLike = { status: string; clipId?: string; duration?: number } | undefined;
 
+/** Length to show for an item whose clip isn't ready yet. */
+function estimatedDuration(item: AudioItem): number {
+  if (item.type !== 'song') return 3;
+  const { start, end } = item.song;
+  return end !== undefined && start !== undefined && end > start ? Math.min(60, end - start) : 60;
+}
+
 /**
- * Lay the ready clips end to end in timeline order, exactly as the generated track will sound.
- * Items without a ready clip are left out. `afterSong` (the "effect after every song" clip) is
- * inserted after each song, attributed to that song.
+ * Lay every item end to end in timeline order, exactly as the generated track will sound.
+ * `afterSong` (the "effect after every song" clip) is inserted after each song, attributed to it.
  */
 export function buildSegments(items: TrackItem[], clips: Record<string, ClipLike>, afterSong?: ClipLike): Segment[] {
   const segments: Segment[] = [];
   let t = 0;
-  const push = (id: string, itemId: string, clip: ClipLike) => {
-    if (clip?.status !== 'ready' || !clip.clipId || !clip.duration) return;
-    segments.push({ id, itemId, clipId: clip.clipId, start: t, duration: clip.duration });
-    t += clip.duration;
+  const push = (id: string, itemId: string, kind: Segment['kind'], clip: ClipLike, estimate: number, after?: boolean) => {
+    const ready = clip?.status === 'ready' && !!clip.clipId && !!clip.duration;
+    const duration = ready ? clip!.duration! : estimate;
+    const status = ready ? 'ready' : clip?.status === 'error' ? 'error' : 'pending';
+    segments.push({ id, itemId, kind, status, clipId: ready ? clip!.clipId : undefined, start: t, duration, ...(after ? { after } : {}) });
+    t += duration;
   };
   for (const item of items) {
     if (!isAudioItem(item)) continue;
-    push(item.id, item.id, clips[item.id]);
-    if (item.type === 'song' && afterSong && clips[item.id]?.status === 'ready') push(`${item.id}:after`, item.id, afterSong);
+    push(item.id, item.id, item.type, clips[item.id], estimatedDuration(item));
+    if (item.type === 'song' && afterSong) push(`${item.id}:after`, item.id, 'effect', afterSong, 2, true);
   }
   return segments;
+}
+
+/** Index of the first playable segment at or after `from`, or -1. */
+export function nextReady(segments: Segment[], from: number): number {
+  for (let i = Math.max(0, from); i < segments.length; i++) if (segments[i].status === 'ready') return i;
+  return -1;
 }
 
 /** Find the segment containing global time `t` and the offset into it (clamped to the ends). */

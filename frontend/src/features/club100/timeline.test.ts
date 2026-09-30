@@ -12,6 +12,7 @@ import {
   injectAutoEffect,
   clipKey,
   buildSegments,
+  nextReady,
   locate,
   formatTime,
   parseTimeInput,
@@ -192,23 +193,34 @@ describe('clip helpers', () => {
     expect(clipKey(songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 10, end: 40 }))).toBe('song|https://youtu.be/aaaaaaaaaaa|10|40');
   });
 
-  it('buildSegments skips unready clips and locate finds offsets', () => {
+  it('buildSegments lays out every item and locate finds offsets', () => {
     const segs = buildSegments([song, snip, fx], {
       [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 },
       [snip.id]: { status: 'pending' },
       [fx.id]: { status: 'ready', clipId: 'fx.mp3', duration: 3 },
     });
-    expect(segs.map(s => [s.itemId, s.start])).toEqual([[song.id, 0], [fx.id, 60]]);
+    // The pending snippet is shown with an estimated 3s but has no audio.
+    expect(segs.map(s => [s.itemId, s.status, s.start])).toEqual([[song.id, 'ready', 0], [snip.id, 'pending', 60], [fx.id, 'ready', 63]]);
+    expect(segs[1].clipId).toBeUndefined();
+    expect(nextReady(segs, 1)).toBe(2);
+    expect(nextReady(segs, 3)).toBe(-1);
     const withAfter = buildSegments([song, fx], {
       [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 },
       [fx.id]: { status: 'ready', clipId: 'fx.mp3', duration: 3 },
     }, { status: 'ready', clipId: 'horn.mp3', duration: 2 });
-    expect(withAfter.map(s => [s.id, s.itemId, s.start])).toEqual([
-      [song.id, song.id, 0], [`${song.id}:after`, song.id, 60], [fx.id, fx.id, 62],
+    expect(withAfter.map(s => [s.id, s.itemId, s.start, !!s.after])).toEqual([
+      [song.id, song.id, 0, false], [`${song.id}:after`, song.id, 60, true], [fx.id, fx.id, 62, false],
     ]);
-    expect(locate(segs, 61.5)).toEqual({ index: 1, offset: 1.5 });
-    expect(locate(segs, 999)).toEqual({ index: 1, offset: 3 });
+    expect(locate(segs, 64.5)).toEqual({ index: 2, offset: 1.5 });
+    expect(locate(segs, 999)).toEqual({ index: 2, offset: 3 });
     expect(locate([], 0)).toBeNull();
+  });
+
+  it('unready songs are estimated from their start and end', () => {
+    const short = songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 10, end: 40 });
+    const failed = songItem({ url: 'https://youtu.be/bbbbbbbbbbb', title: 'B' });
+    const segs = buildSegments([short, failed], { [failed.id]: { status: 'error' } });
+    expect(segs.map(s => [s.status, s.duration])).toEqual([['pending', 30], ['error', 60]]);
   });
 
   it('formatTime', () => {
@@ -235,7 +247,7 @@ describe('sections and start times', () => {
     const song = songItem({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'A', start: 0 });
     expect(audioTimeline([intro, song])).toEqual([song]);
     expect(buildSegments([intro, song], { [song.id]: { status: 'ready', clipId: 'a.mp3', duration: 60 } }))
-      .toEqual([{ id: song.id, itemId: song.id, clipId: 'a.mp3', start: 0, duration: 60 }]);
+      .toEqual([{ id: song.id, itemId: song.id, kind: 'song', status: 'ready', clipId: 'a.mp3', start: 0, duration: 60 }]);
     expect(sectionAt([intro, song], 1)).toBe('Intro');
     expect(sectionAt([song, intro], 0)).toBeNull();
     expect(songNumberAt([intro, song], 1)).toBe(1);
