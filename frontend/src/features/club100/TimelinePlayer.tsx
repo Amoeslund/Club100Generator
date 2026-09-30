@@ -4,7 +4,13 @@ import { ClipState } from './useClips';
 import { getClipUrl } from './api';
 import { buildSegments, formatTime, locate, nextReady, Segment } from './timeline';
 
-export type TimelinePlayerHandle = { playItem: (id: string) => void };
+export type TimelinePlayerHandle = {
+  playItem: (id: string) => void;
+  /** Play the lead-in to the next "after every song" effect (from the current song, or the first). */
+  previewAfterSong: () => boolean;
+};
+
+const AFTER_SONG_LEAD_IN = 4; // seconds of the song heard before its after-song effect
 
 const MINUTES = 100;
 const LABEL_SPACING_PX = 22; // minimum room per minute number on the track
@@ -168,7 +174,15 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
     seekTo(seg.start);
     setPlaying(true);
   }, [segments, seekTo]);
-  useImperativeHandle(ref, () => ({ playItem }), [playItem]);
+  const previewAfterSong = useCallback(() => {
+    const afters = segments.filter(s => s.after && s.status === 'ready');
+    const target = afters.find(s => current && s.start >= current.start) ?? afters[0];
+    if (!target) return false;
+    seekTo(Math.max(0, target.start - AFTER_SONG_LEAD_IN));
+    setPlaying(true);
+    return true;
+  }, [segments, current, seekTo]);
+  useImperativeHandle(ref, () => ({ playItem, previewAfterSong }), [playItem, previewAfterSong]);
 
   const step = (delta: number) => {
     // Jump by timeline item (a song together with its after-song effect counts as one).

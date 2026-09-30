@@ -8,6 +8,7 @@ import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
 import { BackupControls } from './BackupControls';
 import { TimelinePlayer, TimelinePlayerHandle } from './TimelinePlayer';
+import { EffectPreview } from './EffectPreview';
 import './club100.css';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
@@ -331,13 +332,27 @@ export const Club100Page: React.FC = () => {
           <aside className="c100-side" aria-label="Export">
 
             <div className="c100-panel c100-stack">
-              <label className="c100-stack" style={{ gap: 4 }}>
-                <span style={{ fontWeight: 600 }}>After every song</span>
-                <select className="c100-select" value={autoEffectId} onChange={e => setAutoEffectId(e.target.value)}>
-                  <option value="">Nothing</option>
-                  {effects.map(effect => <option key={effect.id} value={effect.id}>{effect.name}</option>)}
-                </select>
-              </label>
+              <div className="c100-stack" style={{ gap: 4 }}>
+                <label htmlFor="c100-after-song" style={{ fontWeight: 600 }}>After every song</label>
+                <div className="c100-inline" style={{ flexWrap: 'nowrap' }}>
+                  <select id="c100-after-song" className="c100-select" style={{ flex: 1, minWidth: 0 }} value={autoEffectId} onChange={e => setAutoEffectId(e.target.value)}>
+                    <option value="">Nothing</option>
+                    {effects.map(effect => <option key={effect.id} value={effect.id}>{effect.name}</option>)}
+                  </select>
+                  {autoEffect && <EffectPreview clip={clips[AFTER_SONG_ID]} name={autoEffect.name} />}
+                </div>
+                {autoEffect && (
+                  <button
+                    type="button"
+                    className="c100-btn c100-btn-quiet"
+                    style={{ alignSelf: 'flex-start', paddingLeft: 0 }}
+                    disabled={clips[AFTER_SONG_ID]?.status !== 'ready'}
+                    onClick={() => playerRef.current?.previewAfterSong()}
+                  >
+                    Hear it between songs
+                  </button>
+                )}
+              </div>
               <button type="button" className="c100-btn c100-btn-primary c100-generate" onClick={handleGenerate} disabled={loading || trackItems.length === 0}>
                 {loading ? 'Making the MP3…' : 'Make the MP3'}
               </button>
