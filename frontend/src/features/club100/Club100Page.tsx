@@ -19,6 +19,8 @@ import {
 } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
+import { BackupControls } from './BackupControls';
+import './club100.css';
 import { TimelinePlayer, TimelinePlayerHandle } from './TimelinePlayer';
 const TrackTimeline = lazy(() => import('./TrackTimeline'));
 
@@ -227,6 +229,9 @@ export const Club100Page: React.FC = () => {
     <div style={{ maxWidth: 600, margin: '40px auto 140px', background: '#fff', border: '5px solid black', borderRadius: 16, boxShadow: '8px 8px 0 #000', padding: 32 }}>
       <TimelinePlayer ref={playerRef} items={trackItems} clips={clips} onActiveChange={setActiveItemId} />
       <h1 style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 16 }}>Club 100 Generator</h1>
+      <div className="c100" style={{ minHeight: 0, background: 'none', marginBottom: 16 }}>
+        <BackupControls items={trackItems} onReplace={setTrackItems} />
+      </div>
       {saveError && (
         <div style={{ border: '3px solid #c00', borderRadius: 8, background: '#ffe3e3', padding: 12, marginBottom: 16, fontWeight: 'bold' }}>{saveError}</div>
       )}

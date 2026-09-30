@@ -1,0 +1,63 @@
+/* Club 100 design tokens and components. Colour only carries meaning: one hue per item type,
+   red only for "playing now" and failures. */
+.c100 {
+  --ink: #1d1b3a;
+  --paper: #ffffff;
+  --canvas: #eef0f6;
+  --line: #d6d9e4;
+  --muted: #5d607a;
+  --song: #ffc700;
+  --song-soft: #fff4c2;
+  --snippet: #ff5eaa;
+  --snippet-soft: #ffe1ef;
+  --effect: #2d6bff;
+  --effect-soft: #dde7ff;
+  --live: #e4002b;
+  --live-soft: #ffe0e6;
+  --radius: 10px;
+
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--canvas);
+  min-height: 100vh;
+  font-variant-numeric: tabular-nums;
+}
+.c100 *, .c100 *::before, .c100 *::after { box-sizing: border-box; }
+.c100 :focus-visible { outline: 2px solid var(--effect); outline-offset: 2px; }
+
+.c100-btn {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.c100-btn:hover:not(:disabled) { background: var(--canvas); }
+.c100-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.c100-btn-primary { background: var(--ink); color: var(--paper); }
+.c100-btn-primary:hover:not(:disabled) { background: #33305e; }
+.c100-btn-quiet { border-color: transparent; background: transparent; }
+.c100-btn-quiet:hover:not(:disabled) { background: var(--canvas); }
+.c100-btn-danger { color: var(--live); }
+
+.c100-input, .c100-select, .c100-textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+.c100-input:focus, .c100-select:focus, .c100-textarea:focus { border-color: var(--ink); outline: none; }
+.c100-textarea { width: 100%; resize: vertical; }
+
+.c100-muted { color: var(--muted); font-size: 13px; }
+.c100-error { color: var(--live); }
+
+.c100-backup { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
