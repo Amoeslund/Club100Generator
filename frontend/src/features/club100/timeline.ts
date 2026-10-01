@@ -194,7 +194,7 @@ type ClipLike = { status: string; clipId?: string; duration?: number } | undefin
 function estimatedDuration(item: AudioItem): number {
   if (item.type !== 'song') return 3;
   const { start, end } = item.song;
-  return end !== undefined && start !== undefined && end > start ? Math.min(60, end - start) : 60;
+  return end !== undefined && start !== undefined && end > start ? end - start : 60;
 }
 
 /**

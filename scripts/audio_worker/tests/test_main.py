@@ -214,6 +214,19 @@ class TestSongClipWindow:
         assert '_29.5s_' in clip.name
         assert 29 < main.probe_duration(clip) < 30.2
 
+    def test_end_can_make_clip_longer_than_a_minute(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch)
+        clip, start = main.song_clip('https://youtu.be/aaaaaaaaaaa', 10, 100)
+        assert start == 10
+        assert '_90s_' in clip.name
+        assert 89.5 < main.probe_duration(clip) < 90.5
+
+    def test_end_past_video_end_is_clamped(self, tmp_path, monkeypatch):
+        self._fake_cache(tmp_path, monkeypatch)
+        clip, start = main.song_clip('https://youtu.be/aaaaaaaaaaa', 0, 500)
+        assert start == 0
+        assert 119 < main.probe_duration(clip) < 121
+
     def test_end_before_start_is_ignored(self, tmp_path, monkeypatch):
         self._fake_cache(tmp_path, monkeypatch)
         clip, _ = main.song_clip('https://youtu.be/aaaaaaaaaaa', 30, 5)

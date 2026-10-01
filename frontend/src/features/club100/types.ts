@@ -6,7 +6,7 @@ export type Song = {
   thumbnail?: string;
   /** Clip start in seconds (0.1s precision). Unset means a random start, pinned once chosen. */
   start?: number;
-  /** Optional clip end in seconds; shortens the clip (it is never longer than 60s). */
+  /** Optional clip end in seconds; makes the clip shorter or longer than the default 60s. */
   end?: number;
 };
 

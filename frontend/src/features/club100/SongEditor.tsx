@@ -41,7 +41,7 @@ export const SongEditor: React.FC<{
   const stopAt = useRef<number | null>(null);
 
   const duration = peaks?.duration ?? 0;
-  const length = Math.min(end !== undefined ? end - start : CLIP_SECONDS, CLIP_SECONDS, Math.max(0, duration - start));
+  const length = Math.min(end !== undefined ? end - start : CLIP_SECONDS, Math.max(0, duration - start));
 
   // Follow external changes (e.g. best-minute button elsewhere) when not dragging.
   useEffect(() => {
@@ -115,7 +115,8 @@ export const SongEditor: React.FC<{
   useEffect(draw, [draw]);
 
   const commit = (s: number, e: number | undefined) => {
-    const nextEnd = e !== undefined && e - s >= CLIP_SECONDS - 0.05 ? undefined : e;
+    // An end exactly one minute in is the default, so it is stored as no end at all.
+    const nextEnd = e !== undefined && Math.abs(e - s - CLIP_SECONDS) < 0.05 ? undefined : e;
     if (s !== song.start || nextEnd !== song.end) onChange(round1(s), nextEnd === undefined ? undefined : round1(nextEnd));
   };
 
@@ -162,9 +163,9 @@ export const SongEditor: React.FC<{
     if (mode === 'seek') seek(t);
     if (mode === 'start') {
       const limitEnd = end ?? start + length;
-      setStart(round1(Math.max(end !== undefined ? Math.max(0, end - CLIP_SECONDS) : 0, Math.min(t, limitEnd - 1))));
+      setStart(round1(Math.max(0, Math.min(t, limitEnd - 1))));
     }
-    if (mode === 'end') setEnd(round1(Math.max(start + 1, Math.min(t, start + CLIP_SECONDS, duration))));
+    if (mode === 'end') setEnd(round1(Math.max(start + 1, Math.min(t, duration))));
     if (mode === 'move') {
       const s = round1(Math.max(0, Math.min(duration - length, t - offset)));
       if (end !== undefined) setEnd(round1(s + (end - start)));
@@ -286,7 +287,7 @@ export const SongEditor: React.FC<{
           value={end}
           placeholder="+60s"
           onCommit={v => {
-            const e = v !== undefined && v > start ? Math.min(v, start + CLIP_SECONDS) : undefined;
+            const e = v !== undefined && v > start ? Math.min(v, duration || v) : undefined;
             setEnd(e);
             commit(start, e);
           }}
@@ -294,7 +295,7 @@ export const SongEditor: React.FC<{
         <button type="button" className="c100-btn" onClick={() => { setStart(round1(playhead)); commit(round1(playhead), end !== undefined && end > playhead ? end : undefined); }} disabled={!peaks}>
           Start here
         </button>
-        <button type="button" className="c100-btn" onClick={() => { if (playhead > start) { const e = round1(Math.min(playhead, start + CLIP_SECONDS)); setEnd(e); commit(start, e); } }} disabled={!peaks || playhead <= start}>
+        <button type="button" className="c100-btn" onClick={() => { if (playhead > start) { const e = round1(playhead); setEnd(e); commit(start, e); } }} disabled={!peaks || playhead <= start}>
           End here
         </button>
         <button type="button" className="c100-btn" onClick={suggest} disabled={suggesting}>{suggesting ? 'Finding…' : 'Suggest best minute'}</button>

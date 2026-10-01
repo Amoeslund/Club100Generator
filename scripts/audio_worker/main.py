@@ -399,10 +399,11 @@ def encode_clip(inputs: list[str], out: Path, target_lufs: float | None) -> Path
 CLIP_SECONDS = 60
 
 def song_clip(url, start_override=None, end=None) -> tuple[Path, float]:
-    """Normalized clip of a YouTube video: 60s from `start_override` (or a random start).
+    """Normalized clip of a YouTube video, from `start_override` (or a random start).
 
-    An optional `end` (seconds into the video) shortens the clip; it never makes it longer than
-    CLIP_SECONDS. Starts keep 0.1s precision. Returns (clip path, start second actually used).
+    The clip is CLIP_SECONDS long unless an `end` (seconds into the video) is given, which makes it
+    shorter or longer, never past the end of the video. Starts keep 0.1s precision.
+    Returns (clip path, start second actually used).
     """
     if not is_valid_youtube_url(url):
         raise ValueError(f"Refusing to download non-YouTube URL: {url!r}")
@@ -411,9 +412,10 @@ def song_clip(url, start_override=None, end=None) -> tuple[Path, float]:
     wanted_start = None if start_override is None else round(float(start_override), 1)
     length = CLIP_SECONDS
     if end is not None and wanted_start is not None and float(end) > wanted_start:
-        length = min(CLIP_SECONDS, round(float(end) - wanted_start, 1))
+        length = round(float(end) - wanted_start, 1)
     if duration <= length:
         start = 0
+        length = round(duration, 1) if end is not None else length
     elif wanted_start is not None:
         start = max(0, min(int(duration) - length, wanted_start))
     else:

@@ -47,7 +47,7 @@ Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HO
 
 ### Timeline contract
 The app revolves around an ordered `TrackItem[]` (`types.ts`), each with a stable `id`. It is persisted in IndexedDB (`storage.ts`, DB `club100`, store `kv`, key `trackItems`) and the stored format must stay backward compatible: add optional fields or new item types, never rename or migrate existing ones. `storage.ts` keeps one untouched daily backup (`trackItems.backup.YYYY-MM-DD`, last 3), taken on load and on a session's first save, and `BackupControls.tsx` exports/imports the timeline as JSON.
-- `song`: `{ url, title, start?, end? }`. `start` (seconds, 0.1s precision) pins the clip start; otherwise a random start is chosen and then pinned. Optional `end` shortens the clip (never beyond 60s).
+- `song`: `{ url, title, start?, end? }`. `start` (seconds, 0.1s precision) pins the clip start; otherwise a random start is chosen and then pinned. Optional `end` sets the clip length (shorter or longer than the default 60s, clamped to the video).
 - `snippet`: `{ type: 'upload', audioUrl, label? }`, where `audioUrl` is a base64 `data:` URL (browser recordings/uploads are sent inline). There is no TTS.
 - `effect`: `{ id, ... }`; only `id` is used server-side, looked up in `EFFECTS_MAP`.
 - `section`: `{ title }`, an optional user-added heading of any length. No audio: `audioTimeline()` strips sections before `/generate`, and `process_audio` ignores them too. Songs are numbered (minute 1, 2, ...) across sections.

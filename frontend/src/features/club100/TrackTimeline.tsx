@@ -204,7 +204,7 @@ const TimelineRow: React.FC<{
     if (item.type === 'song') {
       title = item.song.title;
       const start = item.song.start;
-      const length = item.song.end !== undefined && start !== undefined ? Math.min(60, item.song.end - start) : 60;
+      const length = item.song.end !== undefined && start !== undefined ? item.song.end - start : 60;
       sub = start === undefined ? 'Random start' : `${formatTime(start, true)}–${formatTime(start + length, true)}`;
     } else if (item.type === 'effect') {
       title = item.effect.name;
