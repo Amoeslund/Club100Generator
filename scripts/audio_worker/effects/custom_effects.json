@@ -13,5 +13,15 @@
     "id": "klovne_hardbass_edit",
     "name": "Entry of the Gladiators - Klovne Hardbass Edit (nr. 100)",
     "audioUrl": "/effects/klovne-hardbass-edit.mp3"
+  },
+  {
+    "id": "mi_britney_give_me_strength_47754",
+    "name": "Britney, Give Me Strength!",
+    "audioUrl": "/effects/mi-britney-give-me-strength-47754.mp3"
+  },
+  {
+    "id": "mi_scooter_are_you_ready_97952",
+    "name": "Scooter are you ready",
+    "audioUrl": "/effects/mi-scooter-are-you-ready-97952.mp3"
   }
 ]
