@@ -205,6 +205,10 @@ body { margin: 0; }
 }
 .c100-tip-time { opacity: 0.7; }
 .c100-ruler { position: relative; height: 16px; margin-top: 3px; font-size: 11px; color: var(--muted); }
+/* Where the zoomed view sits in the whole Club 100 */
+.c100-overview { position: absolute; left: 0; right: 0; bottom: -6px; height: 3px; background: var(--canvas); border-radius: 2px; }
+.c100-overview > span { position: absolute; top: 0; bottom: 0; background: var(--ink); border-radius: 2px; min-width: 4px; }
+.c100-zoom-reset { padding: 0 8px; margin-right: 6px; font-size: 13px; }
 .c100-ruler > span { position: absolute; top: 0; transform: translateX(-50%); }
 
 @keyframes c100-spin { to { transform: rotate(360deg); } }

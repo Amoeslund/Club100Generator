@@ -15,6 +15,8 @@ const AFTER_SONG_LEAD_IN = 4; // seconds of the song heard before its after-song
 const MINUTES = 100;
 const LABEL_SPACING_PX = 22; // minimum room per minute number on the track
 const TICK_SPACING_PX = 72; // minimum room per time label on the ruler
+const MIN_VIEW_SECONDS = 20; // deepest zoom: 20 seconds across the whole track
+const TICK_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1200, 1800, 3600]; // seconds
 
 function itemTitle(item: TrackItem | undefined): string {
   if (!item) return '';
@@ -47,6 +49,8 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
   const [offset, setOffset] = useState(0); // seconds into the current segment
   const [playing, setPlaying] = useState(false);
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null);
+  // Visible window of the timeline in seconds; null span means "fit the whole Club 100".
+  const [view, setView] = useState<{ start: number; span: number | null }>({ start: 0, span: null });
   const pendingSeek = useRef<number | null>(null);
   const loadedClip = useRef<string | null>(null);
   // Loading a new src fires 'pause'; that must not stop continuous playback.
@@ -201,21 +205,66 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
     setPlaying(p => !p);
   };
 
+  // Zoom: the wheel zooms around the pointer, Shift+wheel or a horizontal swipe pans.
+  const viewSpan = Math.min(total, view.span ?? total) || total;
+  const viewStart = Math.max(0, Math.min(total - viewSpan, view.start));
+  const zoomed = viewSpan < total - 0.5;
+  const clampView = useCallback((start: number, span: number) => {
+    const s = Math.max(Math.min(MIN_VIEW_SECONDS, total), Math.min(total, span));
+    return s >= total - 0.5 ? { start: 0, span: null } : { start: Math.max(0, Math.min(total - s, start)), span: s };
+  }, [total]);
+  const viewRef = useRef({ viewStart, viewSpan });
+  viewRef.current = { viewStart, viewSpan };
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    // Native listener: React's onWheel is passive, so it can't stop the page from scrolling.
+    const onWheel = (e: WheelEvent) => {
+      if (!total) return;
+      e.preventDefault();
+      const { viewStart: vs, viewSpan: span } = viewRef.current;
+      const rect = el.getBoundingClientRect();
+      const pan = e.shiftKey ? e.deltaY : Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : 0;
+      // Several wheel events can arrive before React re-renders: update the ref right away.
+      const apply = (v: { start: number; span: number | null }) => {
+        viewRef.current = { viewStart: v.start, viewSpan: v.span ?? total };
+        setView(v);
+      };
+      if (pan) {
+        apply(clampView(vs + (pan / rect.width) * span, span));
+        return;
+      }
+      const anchor = vs + ((e.clientX - rect.left) / rect.width) * span;
+      const factor = Math.exp(e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015));
+      const next = span * factor;
+      apply(clampView(anchor - ((anchor - vs) / span) * next, next));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [total, clampView]);
+  // Keep the playhead in view while playing a zoomed timeline.
+  useEffect(() => {
+    if (!zoomed || !playing) return;
+    if (time < viewStart || time > viewStart + viewSpan) setView(clampView(time - viewSpan * 0.1, viewSpan));
+  }, [zoomed, playing, time, viewStart, viewSpan, clampView]);
+
   const timeAtX = (clientX: number) => {
     const rect = trackRef.current?.getBoundingClientRect();
     if (!rect || total === 0) return null;
     const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-    return { x, t: (x / rect.width) * total };
+    return { x, t: viewStart + (x / rect.width) * viewSpan };
   };
 
-  const pct = (t: number) => (total ? (t / total) * 100 : 0);
+  const pct = (t: number) => (viewSpan ? ((t - viewStart) / viewSpan) * 100 : 0);
+  const visible = (start: number, end: number) => end > viewStart && start < viewStart + viewSpan;
   const hoverSeg = hover ? segments[locate(segments, hover.t)?.index ?? -1] : undefined;
   const hoverItem = hoverSeg ? itemsById.get(hoverSeg.itemId) : undefined;
   // Number every minute when there is room, otherwise every 2nd/5th/10th... so labels never collide.
-  const perMinutePx = songCount ? trackWidth / songCount : trackWidth;
+  const perMinutePx = songCount && viewSpan ? (trackWidth * (total / viewSpan)) / songCount : trackWidth;
   const labelEvery = [1, 2, 5, 10, 20, 25, 50].find(n => n * perMinutePx >= LABEL_SPACING_PX) ?? 50;
-  const tickEvery = ([5, 10, 15, 20, 30, 60].find(min => total && ((min * 60) / total) * trackWidth >= TICK_SPACING_PX) ?? 60) * 60;
-  const ticks = Array.from({ length: Math.floor(total / tickEvery) }, (_, i) => (i + 1) * tickEvery);
+  const tickEvery = TICK_STEPS.find(sec => viewSpan && (sec / viewSpan) * trackWidth >= TICK_SPACING_PX) ?? 3600;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(viewStart / tickEvery) * tickEvery; t <= viewStart + viewSpan; t += tickEvery) if (t > 0) ticks.push(t);
   const describe = (seg: Segment | undefined, item: TrackItem | undefined) =>
     seg?.after ? `${afterSongName ?? 'Sound effect'}, after ${itemTitle(item)}` : itemTitle(item);
 
@@ -265,7 +314,14 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
           {currentItem && sectionOf.get(currentItem.id) && <div className="c100-muted">{sectionOf.get(currentItem.id)}</div>}
         </div>
         <div className="c100-dock-status">
-          <span className="c100-time">{formatTime(time)} / {formatTime(total)}</span>
+          <span className="c100-time">
+            {zoomed && (
+              <button type="button" className="c100-btn c100-btn-quiet c100-zoom-reset" onClick={() => setView({ start: 0, span: null })} title="Show the whole Club 100 (double-click the timeline or press 0)">
+                Zoom out
+              </button>
+            )}
+            {formatTime(time)} / {formatTime(total)}
+          </span>
           <span className="c100-muted">
             {readyCount === audioItems.length ? `All ${audioItems.length} clips ready` : `${readyCount} of ${audioItems.length} clips ready`}
             {pendingCount > 0 && `, ${pendingCount} preparing`}
@@ -276,11 +332,15 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
 
       <div className="c100-timeline">
         <div className="c100-bands" aria-hidden>
-          {bands.map(b => (
-            <span key={b.id} className="c100-band" style={{ left: `${pct(b.start)}%`, width: `${pct(b.end - b.start)}%` }} title={b.title || undefined}>
-              {b.title}
-            </span>
-          ))}
+          {bands.filter(b => visible(b.start, b.end)).map(b => {
+            // A band that starts off-screen keeps its title readable at the left edge.
+            const left = Math.max(0, pct(b.start));
+            return (
+              <span key={b.id} className="c100-band" style={{ left: `${left}%`, width: `${Math.min(100, pct(b.end)) - left}%` }} title={b.title || undefined}>
+                {b.title}
+              </span>
+            );
+          })}
         </div>
         <div
           ref={trackRef}
@@ -303,13 +363,17 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
             if (hit && e.buttons === 1) seekTo(hit.t);
           }}
           onPointerLeave={() => setHover(null)}
+          onDoubleClick={() => setView({ start: 0, span: null })}
           onKeyDown={e => {
+            if (e.key === '+' || e.key === '=') { e.preventDefault(); setView(clampView(time - viewSpan / 4, viewSpan / 2)); }
+            if (e.key === '-') { e.preventDefault(); setView(clampView(time - viewSpan, viewSpan * 2)); }
+            if (e.key === '0') { e.preventDefault(); setView({ start: 0, span: null }); }
             if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(time + (e.shiftKey ? 60 : 5)); }
             if (e.key === 'ArrowLeft') { e.preventDefault(); seekTo(time - (e.shiftKey ? 60 : 5)); }
             if (e.key === 'Home') { e.preventDefault(); seekTo(0); }
           }}
         >
-          {segments.map(seg => {
+          {segments.filter(seg => visible(seg.start, seg.start + seg.duration)).map(seg => {
             const m = minuteOf.get(seg.itemId) ?? 0;
             const isSong = seg.kind === 'song' && !seg.after;
             const showLabel = isSong && (m % labelEvery === 0 || (m === 1 && labelEvery <= 5));
@@ -319,13 +383,14 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
                 key={seg.id}
                 className={`c100-block is-${seg.status}${isCurrent ? ' is-current' : ''}`}
                 data-kind={seg.kind}
-                style={{ left: `${pct(seg.start)}%`, width: `${pct(seg.duration)}%` }}
+                // Clamped to the visible window so a zoomed block never spills out of the track.
+                style={{ left: `${Math.max(0, pct(seg.start))}%`, width: `${Math.min(100, pct(seg.start + seg.duration)) - Math.max(0, pct(seg.start))}%` }}
               >
                 {showLabel && <span className="c100-block-label">{m}</span>}
               </span>
             );
           })}
-          {total > 0 && <span className="c100-track-playhead" style={{ left: `${pct(time)}%` }} />}
+          {total > 0 && visible(time, time) && <span className="c100-track-playhead" style={{ left: `${pct(time)}%` }} />}
           {hover && hoverItem && (
             <span className="c100-tip" style={{ left: hover.x }}>
               {hoverItem.type === 'song' && !hoverSeg?.after ? `Minute ${minuteOf.get(hoverItem.id)}: ` : ''}
@@ -337,10 +402,15 @@ export const TimelinePlayer = forwardRef<TimelinePlayerHandle, {
           )}
         </div>
         <div className="c100-ruler" aria-hidden>
-          <span style={{ left: 0, transform: 'none' }}>0:00</span>
+          <span style={{ left: 0, transform: 'none' }}>{formatTime(viewStart)}</span>
           {ticks.map(t => ((pct(t) / 100) * trackWidth > 44 && (pct(t) / 100) * trackWidth < trackWidth - 64 ? <span key={t} style={{ left: `${pct(t)}%` }}>{formatTime(t)}</span> : null))}
-          <span style={{ left: 'auto', right: 0, transform: 'none' }}>{formatTime(total)}</span>
+          <span style={{ left: 'auto', right: 0, transform: 'none' }}>{formatTime(viewStart + viewSpan)}</span>
         </div>
+        {zoomed ? (
+          <div className="c100-overview" aria-hidden>
+            <span style={{ left: `${(viewStart / total) * 100}%`, width: `${(viewSpan / total) * 100}%` }} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
