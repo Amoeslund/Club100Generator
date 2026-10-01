@@ -42,7 +42,7 @@ Backend env vars: `ALLOWED_ORIGINS` (CORS, default `http://localhost:3000`), `HO
 ## Architecture
 
 ### Request flow
-- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/clips`, `/clips/<clipId>`, `/songs/<videoId>/audio`, `/songs/<videoId>/peaks`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
+- The browser calls the Flask backend directly at `BACKEND_URL` (`frontend/src/features/club100/config.ts`) for `/generate`, `/clips`, `/clips/<clipId>`, `/songs/<videoId>/audio`, `/songs/<videoId>/peaks`, `/songs/<videoId>/info`, `/download/<jobId>`, `/effects`, `/effects/<file>`, `/effects/import`, `/best-start`. CORS is restricted to `ALLOWED_ORIGINS`.
 - YouTube search goes through the Next route `frontend/src/app/api/youtube-search/route.ts` (helpers in `youtube.ts`). It uses the YouTube Data API when a key is set, with the backend's `/ytsearch` (yt-dlp) as fallback. The client caches results in `localStorage` for 24h.
 
 ### Timeline contract
@@ -52,7 +52,7 @@ The app revolves around an ordered `TrackItem[]` (`types.ts`), each with a stabl
 - `effect`: `{ id, ... }`; only `id` is used server-side, looked up in `EFFECTS_MAP`.
 - `section`: `{ title }`, an optional user-added heading of any length. No audio: `audioTimeline()` strips sections before `/generate`, and `process_audio` ignores them too. Songs are numbered (minute 1, 2, ...) across sections.
 
-Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `timeline.test.ts`). Mass import lines are either a YouTube URL (a `?t=` start time becomes `song.start`) followed by an optional tab/comma-separated title, or a free-text search query. UI state lives in `Club100Page.tsx`; `TrackTimeline.tsx` is the lazy-loaded dnd-kit running order (rows live at module level so they don't remount on every render).
+Pure timeline and import-parsing helpers live in `timeline.ts` (unit tested in `timeline.test.ts`). Mass import lines are either a YouTube URL (a `?t=` start time becomes `song.start`) followed by an optional tab/comma-separated title, or a free-text search query. A song whose title is still its link (`needsTitle`) gets its YouTube title filled in by `Club100Page.tsx` from `GET /songs/<videoId>/info` (`video_title`: oEmbed, yt-dlp fallback). UI state lives in `Club100Page.tsx`; `TrackTimeline.tsx` is the lazy-loaded dnd-kit running order (rows live at module level so they don't remount on every render).
 
 ### UI and design
 Styles live in `club100.css` as `c100-*` classes with CSS-variable tokens; one typeface (Bricolage Grotesque via `next/font` in `app/layout.tsx`). Colour carries meaning only: song yellow, snippet pink, effect blue, red only for what is playing and what failed. The tool is a generic Club 100 generator, not tied to one party's theme. Layout: running order on the left, a sticky sidebar with the MP3 export, and `TimelinePlayer.tsx` as a big timeline docked at the bottom of the screen (`--dock-h`): transport, current minute, section headings as bands, one block per item sized by length and numbered by minute (label spacing adapts to width), a time ruler; click or drag to scrub. The wheel zooms around the pointer (down to 20s across the track), Shift+wheel or a horizontal swipe pans, double-click or 0 zooms out; while zoomed the view follows the playhead.

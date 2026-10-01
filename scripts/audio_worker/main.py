@@ -14,6 +14,8 @@ import array
 import base64
 import pathlib
 import concurrent.futures
+import urllib.parse
+import urllib.request
 import uuid
 
 EFFECTS_DIR = pathlib.Path(__file__).parent / 'effects'
@@ -420,6 +422,30 @@ def song_clip(url, start_override=None, end=None) -> tuple[Path, float]:
     suffix = "" if length == CLIP_SECONDS else f"_{length:g}s"
     clip = CLIP_CACHE_DIR / f"song_{extract_youtube_id(url)}_{start:g}{suffix}_{SONG_LUFS:g}.mp3"
     return encode_clip(["-ss", f"{start:g}", "-t", f"{length:g}", "-i", str(full)], clip, SONG_LUFS), start
+
+_title_cache: dict[str, str] = {}
+
+def video_title(video_id: str) -> str:
+    """Title of a YouTube video, for songs added by pasting a link.
+
+    Uses YouTube's oEmbed endpoint (fast, no JavaScript runtime) and falls back to yt-dlp.
+    """
+    if video_id in _title_cache:
+        return _title_cache[video_id]
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    title = ""
+    try:
+        oembed = "https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(url, safe="")
+        with urllib.request.urlopen(oembed, timeout=10) as resp:
+            title = json.load(resp).get("title", "")
+    except Exception:
+        result = subprocess.run(YTDLP + ["--skip-download", "--print", "%(title)s", url],
+                                capture_output=True, text=True, check=True, timeout=YTDLP_TIMEOUT)
+        title = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+    if not title:
+        raise ValueError(f"Could not find a title for video {video_id}")
+    _title_cache[video_id] = title
+    return title
 
 def audio_mimetype(path: Path) -> str:
     """Real container type of a cached download. yt-dlp's bestaudio is usually WebM/Opus even

@@ -163,3 +163,14 @@ class TestClipEndpoints:
 
     def test_rejects_path_traversal(self, client):
         assert client.get('/clips/..%5Cmain.py').status_code in (400, 404)
+
+
+class TestSongInfo:
+    def test_returns_title(self, client, monkeypatch):
+        monkeypatch.setattr(server, 'video_title', lambda vid: f'Title of {vid}')
+        resp = client.get('/songs/aaaaaaaaaaa/info')
+        assert resp.status_code == 200
+        assert resp.get_json() == {'title': 'Title of aaaaaaaaaaa'}
+
+    def test_rejects_bad_id(self, client):
+        assert client.get('/songs/not-an-id/info').status_code == 400

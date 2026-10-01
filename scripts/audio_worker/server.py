@@ -10,7 +10,7 @@ import threading
 import traceback
 import uuid
 import pathlib
-from main import process_audio, build_clip, probe_duration, ensure_cached, song_peaks, audio_mimetype, CLIP_CACHE_DIR, EFFECTS, YTDLP, is_valid_youtube_url
+from main import process_audio, build_clip, probe_duration, ensure_cached, song_peaks, audio_mimetype, video_title, CLIP_CACHE_DIR, EFFECTS, YTDLP, is_valid_youtube_url
 from myinstants import import_myinstants
 from best_start import find_best_start
 from flask_cors import CORS
@@ -163,6 +163,18 @@ def song_audio(video_id):
     size = path.stat().st_size
     return send_file(path, mimetype=audio_mimetype(path), conditional=True, max_age=3600,
                      etag=f'{video_id}-{size}', last_modified=path.stat().st_ctime)
+
+
+@app.route('/songs/<video_id>/info', methods=['GET'])
+def song_info(video_id):
+    """Title of a YouTube video: {title}."""
+    if not re.fullmatch(r'[\w-]{11}', video_id):
+        return jsonify({'error': 'Invalid video id'}), 400
+    try:
+        return jsonify({'title': video_title(video_id)})
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': _clip_error(e)}), 422
 
 
 @app.route('/songs/<video_id>/peaks', methods=['GET'])

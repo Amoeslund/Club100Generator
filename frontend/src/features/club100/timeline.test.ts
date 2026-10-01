@@ -15,6 +15,7 @@ import {
   nextReady,
   locate,
   formatTime,
+  needsTitle,
   parseTimeInput,
   sectionItem,
   audioTimeline,
@@ -264,5 +265,14 @@ describe('sections and start times', () => {
     expect(loaded[2]).toBe(saved[2]);
     expect(loaded[1]).toMatchObject(saved[1]);
     expect(audioTimeline(loaded)).toEqual(loaded);
+  });
+});
+
+describe('needsTitle', () => {
+  it('flags songs whose title is still the link', () => {
+    expect(needsTitle({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'https://youtu.be/aaaaaaaaaaa' })).toBe(true);
+    expect(needsTitle({ url: 'https://youtu.be/aaaaaaaaaaa?t=5', title: 'https://youtu.be/aaaaaaaaaaa' })).toBe(true);
+    expect(needsTitle({ url: 'https://youtu.be/aaaaaaaaaaa', title: '' })).toBe(true);
+    expect(needsTitle({ url: 'https://youtu.be/aaaaaaaaaaa', title: 'Layla - DJ Robin' })).toBe(false);
   });
 });

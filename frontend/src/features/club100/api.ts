@@ -135,3 +135,11 @@ export async function fetchSongPeaks(videoId: string): Promise<SongPeaks> {
   if (!res.ok) throw new Error(data.error || `Could not load the song (${res.status})`);
   return data;
 }
+
+/** Title of a YouTube video, for songs added by pasting a link. */
+export async function fetchSongTitle(videoId: string): Promise<string> {
+  const res = await fetch(`${BACKEND_URL}/songs/${videoId}/info`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.title) throw new Error(data.error || `Could not get the title (${res.status})`);
+  return data.title;
+}

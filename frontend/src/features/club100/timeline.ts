@@ -257,3 +257,8 @@ export function parseTimeInput(value: string): number | undefined | null {
   if (!/^\d+(:\d{1,2}){0,2}(\.\d)?$/.test(v)) return null;
   return Math.round(v.split(':').reduce((total, part) => total * 60 + Number(part), 0) * 10) / 10;
 }
+
+/** True when a song still has its link as its title (added by pasting a URL without a title). */
+export function needsTitle(song: Song): boolean {
+  return !song.title.trim() || song.title.trim() === song.url.trim() || /^https?:\/\//.test(song.title.trim());
+}

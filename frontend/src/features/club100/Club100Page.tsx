@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react';
 import { Song, Club100Job, TrackItem, Effect } from './types';
-import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart } from './api';
+import { generateTrack, youtubeSearch, getEffects, importMyInstantsEffect, findBestStart, fetchSongTitle } from './api';
 import { GenerateProgress } from './GenerateProgress';
 import { SongSearch } from './SongSearch';
-import { addSong, injectAutoEffect, ensureIds, songItem, effectItem, parseImportLine, audioTimeline } from './timeline';
+import { addSong, injectAutoEffect, ensureIds, songItem, effectItem, parseImportLine, audioTimeline, needsTitle, getYoutubeId } from './timeline';
 import { loadTimeline, saveTimeline } from './storage';
 import { useClips } from './useClips';
 import { BackupControls } from './BackupControls';
@@ -99,6 +99,22 @@ export const Club100Page: React.FC = () => {
         setSaveError('Could not save the running order in this browser. Changes are only kept until you close or reload the page, so use Export timeline now.');
       });
   }, [trackItems, timelineLoaded]);
+
+  // Songs added by pasting a link get their YouTube title filled in (also fixes older items).
+  const titleRequested = useRef(new Set<string>());
+  useEffect(() => {
+    for (const item of trackItems) {
+      if (item.type !== 'song' || !needsTitle(item.song) || titleRequested.current.has(item.id)) continue;
+      const videoId = getYoutubeId(item.song.url);
+      if (!videoId) continue;
+      titleRequested.current.add(item.id);
+      const url = item.song.url;
+      fetchSongTitle(videoId)
+        .then(title => setTrackItems(prev => prev.map(it =>
+          it.id === item.id && it.type === 'song' && it.song.url === url && needsTitle(it.song) ? { ...it, song: { ...it.song, title } } : it)))
+        .catch(err => console.warn('Could not fetch a song title', err));
+    }
+  }, [trackItems]);
 
   const handleAddSong = (song: Song) => setTrackItems(prev => addSong(prev, song));
 
